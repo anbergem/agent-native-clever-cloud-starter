@@ -160,6 +160,21 @@ pnpm db:reset
 pnpm dev
 ```
 
+`.dev.vars` is optional here, and worth understanding before you reach step 7. It is where
+Wrangler reads secrets for the Worker (`pnpm dev:worker`), but when it is absent Wrangler falls
+back to `.env`, so a fresh clone with only `.env` runs the Worker fine. Copy
+`.dev.vars.example` to `.dev.vars` when you want the Worker to use *different* values from the
+Node dev server — a separate `ANTHROPIC_API_KEY` or `SEED_PASSWORD`, say. `pnpm verify:worker`
+and `pnpm test:e2e:full` need neither file: each injects its own throwaway `BETTER_AUTH_SECRET`
+and runs on its own temporary state.
+
+What does matter before step 7 is that the two local runtimes have **separate databases, and
+separate seeds**. `pnpm dev` serves `data/app.db` and is seeded by `pnpm db:seed`;
+`pnpm dev:worker` serves the local D1 under `.wrangler/` and is seeded by
+`pnpm db:seed:worker`. Seeding one does nothing for the other, and the symptom is confusing: a
+sign-in page that rejects every password usually means the database behind it is empty rather
+than the password wrong. `README.md` has the one-line query that tells those apart.
+
 Leave `pnpm dev` running and, in a second terminal:
 
 ```bash
@@ -184,7 +199,8 @@ pnpm test:e2e:full      # builds the Worker and runs the browser suite against i
 ```
 
 All four must pass before you deploy anything. `pnpm test:e2e:full` needs Chromium once:
-`pnpm exec playwright install --with-deps chromium`.
+`pnpm exec playwright install --with-deps chromium`. The last two build and boot the real
+Worker on their own temporary D1, so they depend on neither `.env` nor `.dev.vars`.
 
 ### 8. Push the repository
 

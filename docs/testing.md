@@ -75,6 +75,7 @@ load-bearing as the application and easier to break silently.
 | `worker-smoke.test.mjs` | The smoke script's own argument handling and check selection |
 | `i18n-catalogs.test.mjs` | That two catalogs agreeing on a *broken* placeholder still fail the guard |
 | `bootstrap.test.mjs` | The bootstrap script against stub `wrangler`, `gh` and `pnpm` on a temporary PATH: the plan, idempotency, the exact argument arrays and JSON bodies, every refusal, and that no secret reaches stdout or stderr |
+| `wrangler-vars.test.mjs` | That a var declared only at the top level of `wrangler.jsonc` is reported for every environment that omits it — wrangler does not inherit `vars`, and the only other sign is a warning in a deploy log |
 | `eval-json.test.mjs` | That a model-backed `--json` run puts one JSON document on stdout and its preparation output on stderr, that `--out` writes that document itself and still gates on the exit code, with every provider credential stripped so it makes no paid request |
 
 `bootstrap.test.mjs` is the pattern to copy for anything that drives a cloud CLI: the stubs
