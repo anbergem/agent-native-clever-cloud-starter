@@ -135,3 +135,30 @@ test("a signed-out caller remains unauthenticated and invitation membership stil
   );
   expect(removed.status(), await removed.text()).toBe(200);
 });
+
+test("an owner cannot enable email-domain auto-join, and the control is not offered", async ({
+  ownerPage,
+}) => {
+  // A non-empty allowed_domain makes the framework admit every new signup at
+  // that domain, which is self-admission by another route. The server refuses
+  // the write; the Team page does not show a control that cannot work.
+  const setDomain = await ownerPage.request.put("/_agent-native/org/domain", {
+    data: { domain: "example.invalid" },
+  });
+  expect(setDomain.status(), await setDomain.text()).toBe(403);
+
+  const me = await ownerPage.request.get("/_agent-native/org/me");
+  expect(me.status()).toBe(200);
+  const body = (await me.json()) as { allowedDomain?: string | null };
+  expect(body.allowedDomain ?? null).toBeNull();
+
+  await ownerPage.goto("/settings");
+  await ownerPage.getByRole("tab", { name: "Organization" }).click();
+  await expect(ownerPage.getByText("Email domain auto-join")).toBeHidden();
+
+  // Organization switching, the other PUT on this prefix, still works.
+  const switched = await ownerPage.request.put("/_agent-native/org/switch", {
+    data: { orgId: "org_acme" },
+  });
+  expect(switched.status(), await switched.text()).toBe(200);
+});

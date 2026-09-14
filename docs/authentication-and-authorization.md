@@ -79,12 +79,26 @@ organization`. Membership is invite-only in every environment: an existing membe
 or `admin` invites people from the Team page.
 
 Domain-based joining exists in the framework (`allowed_domain` on the organization, and
-`POST /_agent-native/org/join-by-domain`). It is incompatible with this app's invite-only policy:
-the request policy denies its manual join route. The supported bootstrap procedure leaves
-`allowed_domain` empty. The framework also has an automatic domain-match path during signup and
-organization-context resolution, so an operator must not configure a domain for an invite-only
-deployment; an existing non-empty setting must be cleared before relying on this policy. Do not
-use the domain setting to provision people; send an invitation instead.
+`POST /_agent-native/org/join-by-domain`). It is incompatible with this app's invite-only policy
+and is closed from both ends. The request policy denies the manual join route, and it also
+denies `PUT /_agent-native/org/domain` — the write that sets `allowed_domain` in the first
+place. That second denial is the load-bearing one: a non-empty `allowed_domain` makes the
+framework's Better Auth `user.create.after` hook admit every new signup at that domain, which
+is self-admission through a path no org route ever sees. Refusing the write means the automatic
+path has nothing to match on.
+
+The framework's Team page renders an "Email domain auto-join" control for owners and admins.
+This app hides it (`.invite-only-team #email-domain` in `app/global.css`) because the route
+behind it is refused — the server denial is the control, and hiding is only there to avoid a
+button that always fails. If a deployment somehow has a non-empty `allowed_domain`, clear it
+against the database; the route that would clear it from the UI is closed too. Do not use the
+domain setting to provision people; send an invitation instead.
+
+The guard (`server/plugins/organization-self-admission.ts`) matches on the path *relative to the
+organization mount point*, not on an absolute URL, so it holds unchanged if the application is
+later served below an `APP_BASE_PATH`. An unrecognised path shape is denied rather than allowed:
+the allow-list names the routes that stay open, and everything else POSTing under the prefix is
+refused.
 
 `AGENT_NATIVE_DISABLE_AUTO_DEV_ACCOUNT=1` disables the localhost "Continue as local dev"
 button so local development uses the seeded users and therefore exercises real roles. The

@@ -91,3 +91,12 @@
 ::-webkit-scrollbar-thumb:hover {
   background: hsl(var(--muted-foreground) / 0.34);
 }
+
+/* The framework's Team page renders an "Email domain auto-join" row for owners
+   and admins. This app denies `PUT /_agent-native/org/domain` (see
+   server/organization-request-policy.ts), so the control cannot work — hide it
+   rather than leave a button that only ever fails. The server guard is the
+   fix; this is cosmetics on top of it. */
+.invite-only-team #email-domain {
+  display: none;
+}

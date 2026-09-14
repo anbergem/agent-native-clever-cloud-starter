@@ -61,5 +61,11 @@ export function InviteOnlyTeamPage() {
     );
   }
 
-  return <TeamPage showTitle={false} />;
+  // `invite-only-team` hides the framework's email-domain auto-join row; the
+  // rule and the reason live in app/global.css.
+  return (
+    <div className="invite-only-team">
+      <TeamPage showTitle={false} />
+    </div>
+  );
 }
