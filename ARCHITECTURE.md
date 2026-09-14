@@ -224,7 +224,10 @@ agent's system prompt and describes the same actions in the same terms.
 
 ## 5. Authentication versus authorization
 
-Two different questions, answered in two different places, in this order.
+Two different questions, answered in two different places, in this order. Before either one,
+the global request policy rejects framework organization self-admission routes; only invitation
+acceptance can give a signed-in person a membership. The first owner is provisioned by the
+trusted operator bootstrap procedure in `docs/bootstrap.md`.
 
 ```mermaid
 flowchart TB

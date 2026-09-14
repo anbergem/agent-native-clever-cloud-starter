@@ -149,8 +149,14 @@ const messages = {
   pages: {
     observabilityPageTitle: "Agent observability",
     teamTitle: "Team",
-    teamCreateOrgDescription:
-      "Create an organization to invite teammates and share this app.",
+    teamLoading: "Loading team access…",
+    teamLoadError: "Team access could not be loaded. Please try again.",
+    teamNoOrganizationTitle: "Organization access required",
+    teamNoOrganizationDescription:
+      "Ask an administrator to send you an invitation to join this organization.",
+    acceptInvitation: "Accept invitation to {{name}}",
+    teamInvitationError:
+      "The invitation could not be accepted. Please try again.",
   },
   root: {
     commandActions: "Actions",

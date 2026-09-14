@@ -69,17 +69,22 @@ the framework's own rule rather than a custom guard, and it means production has
 self-service door at all. The startup check (`server/plugins/00-env-check.ts`) refuses to boot
 production without the Google credentials, so the door it closes is never the only one.
 
-**`AUTO_CREATE_DEFAULT_ORG=0` everywhere is what makes an authenticated stranger harmless.**
-Without it the framework creates a personal organization for a user who has none, and that user
-then has a valid session, an `orgId`, and a role in an organization of their own. With it,
-`resolveActor` finds no membership and every action returns `AUTHORIZATION: Not a member of
-the active organization`. Membership is invite-only in every environment: an existing member
-with `owner` or `admin` invites people from the Team page.
+**`AUTO_CREATE_DEFAULT_ORG=0` prevents implicit personal organizations; it does not itself make
+an authenticated stranger harmless.** The framework separately exposes an authenticated
+organization-creation route, and its prefix fallback also reaches that handler. The app's global
+request policy denies every self-admission POST before the framework route runs, except invitation
+creation and acceptance and the framework's authenticated A2A exchange routes. An uninvited user
+therefore has no organization or membership and every action returns `AUTHORIZATION: No active
+organization`. Membership is invite-only in every environment: an existing member with `owner`
+or `admin` invites people from the Team page.
 
 Domain-based joining exists in the framework (`allowed_domain` on the organization, and
-`POST /_agent-native/org/join-by-domain`). It is **not** enabled. Turning it on means anybody
-with an address at that domain can join themselves, which is a different security model; if you
-want it, set the domain from the Team page and say so in your own documentation.
+`POST /_agent-native/org/join-by-domain`). It is incompatible with this app's invite-only policy:
+the request policy denies its manual join route. The supported bootstrap procedure leaves
+`allowed_domain` empty. The framework also has an automatic domain-match path during signup and
+organization-context resolution, so an operator must not configure a domain for an invite-only
+deployment; an existing non-empty setting must be cleared before relying on this policy. Do not
+use the domain setting to provision people; send an invitation instead.
 
 `AGENT_NATIVE_DISABLE_AUTO_DEV_ACCOUNT=1` disables the localhost "Continue as local dev"
 button so local development uses the seeded users and therefore exercises real roles. The
