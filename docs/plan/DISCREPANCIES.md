@@ -2046,3 +2046,40 @@ identically, so nothing changes behaviourally and "missing" always means a mista
 
 Resolution: 2026-09-14 — applied. `tests/guards/wrangler-vars.test.mjs` covers the rule against
 fixtures and asserts this repository's own config inherits every var.
+## 2026-09-14 D21 — a bad deploy credential failed after the build, not before it
+
+Expected (plan reference): B20 and D21 make the deploy workflows the only path to an environment,
+and a workflow that cannot reach its environment should say so plainly.
+
+Observed: the first real staging deployment of an instantiation spent roughly three minutes on
+checkout, `pnpm install`, `pnpm build:worker` and two artifact uploads before making its first
+Cloudflare call, then failed inside `pnpm db:migrate:staging` with:
+
+```
+A request to the Cloudflare API (/accounts/***/d1/database/<id>/query) failed.
+The given account is not valid or is not authorized to access this service [code: 7403]
+```
+
+Everything after it — `deploy:staging`, the QA reset, the staging smoke — was skipped, so nothing
+was half-applied. But the failure is reported by wrangler in terms of an opaque API code, at the
+bottom of a long log, three minutes in, and says nothing about which of the token, its permissions
+or the account id is wrong. Diagnosing it took a local `wrangler d1 execute --remote` with the
+token passed explicitly — the plain command succeeds from an interactive `wrangler login` session,
+which is a *different* credential from the one CI uses and hides the problem.
+
+Impact: the slowest and least legible possible failure for the most common first-deploy mistake.
+The Cloudflare "Edit Cloudflare Workers" token template does not include D1, so a token that can
+create a Worker and even create a D1 database still cannot run SQL against one.
+
+Proposed handling: a preflight step at the top of both deploy jobs — before checkout in staging,
+after the run-id check in production — that calls
+`GET /accounts/<id>/d1/database?per_page=1` with the job's own credentials. It needs no
+repository, no install and no build, exercises the exact pairing that breaks (this token, this
+account, D1), and on failure prints the HTTP status, Cloudflare's own `[code] message` lines and
+the two things to check, then exits. Only the API's error lines are printed; the response body is
+never echoed and the token never appears.
+
+Resolution: 2026-09-14 — applied to `deploy-staging.yml` and `deploy-production.yml`; verified
+against a deliberately bad credential, which fails in about a second with
+`::error::Cloudflare credentials cannot reach D1 on this account (HTTP 401)` and
+`[10000] Authentication error`. `pnpm lint:workflows` is clean.
