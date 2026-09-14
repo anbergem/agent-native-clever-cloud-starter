@@ -29,6 +29,28 @@ jobs:
       STAGING_URL: ${{ vars.STAGING_URL }}
       DEPLOY_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
     steps:
+      # First, and before install or build: this is the only step that needs no
+      # repository, and it exercises the exact pairing that a wrong credential
+      # breaks — this token, on this account, against D1. A stale token sent the
+      # first real deployment through three minutes of install, build and two
+      # artifact uploads before failing on `d1 migrations apply` with a bare
+      # "[code: 7403]" (DISCREPANCIES.md, 2026-09-14). Only the API's own error
+      # lines are printed; the response body is never echoed.
+      - name: Preflight — Cloudflare credentials reach D1
+        shell: bash
+        run: |
+          body="$RUNNER_TEMP/d1-preflight.json"
+          status=$(curl -sS -o "$body" -w '%{http_code}' \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/d1/database?per_page=1")
+          if [[ "$status" != "200" ]]; then
+            echo "::error::Cloudflare credentials cannot reach D1 on this account (HTTP $status)"
+            jq -r '.errors[]? | "  [\(.code)] \(.message)"' "$body" 2>/dev/null || true
+            echo "CLOUDFLARE_API_TOKEN needs D1 Edit (the \"Edit Cloudflare Workers\" template does not include it),"
+            echo "and CLOUDFLARE_ACCOUNT_ID must be the account that token belongs to."
+            echo "Re-set them with: node scripts/bootstrap.mjs --yes --only github-secrets"
+            exit 1
+          fi
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.DEPLOY_SHA }}
