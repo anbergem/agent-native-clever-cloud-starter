@@ -69,17 +69,36 @@ the framework's own rule rather than a custom guard, and it means production has
 self-service door at all. The startup check (`server/plugins/00-env-check.ts`) refuses to boot
 production without the Google credentials, so the door it closes is never the only one.
 
-**`AUTO_CREATE_DEFAULT_ORG=0` everywhere is what makes an authenticated stranger harmless.**
-Without it the framework creates a personal organization for a user who has none, and that user
-then has a valid session, an `orgId`, and a role in an organization of their own. With it,
-`resolveActor` finds no membership and every action returns `AUTHORIZATION: Not a member of
-the active organization`. Membership is invite-only in every environment: an existing member
-with `owner` or `admin` invites people from the Team page.
+**`AUTO_CREATE_DEFAULT_ORG=0` prevents implicit personal organizations; it does not itself make
+an authenticated stranger harmless.** The framework separately exposes an authenticated
+organization-creation route, and its prefix fallback also reaches that handler. The app's global
+request policy denies every self-admission POST before the framework route runs, except invitation
+creation and acceptance and the framework's authenticated A2A exchange routes. An uninvited user
+therefore has no organization or membership and every action returns `AUTHORIZATION: No active
+organization`. Membership is invite-only in every environment: an existing member with `owner`
+or `admin` invites people from the Team page.
 
 Domain-based joining exists in the framework (`allowed_domain` on the organization, and
-`POST /_agent-native/org/join-by-domain`). It is **not** enabled. Turning it on means anybody
-with an address at that domain can join themselves, which is a different security model; if you
-want it, set the domain from the Team page and say so in your own documentation.
+`POST /_agent-native/org/join-by-domain`). It is incompatible with this app's invite-only policy
+and is closed from both ends. The request policy denies the manual join route, and it also
+denies `PUT /_agent-native/org/domain` — the write that sets `allowed_domain` in the first
+place. That second denial is the load-bearing one: a non-empty `allowed_domain` makes the
+framework's Better Auth `user.create.after` hook admit every new signup at that domain, which
+is self-admission through a path no org route ever sees. Refusing the write means the automatic
+path has nothing to match on.
+
+The framework's Team page renders an "Email domain auto-join" control for owners and admins.
+This app hides it (`.invite-only-team #email-domain` in `app/global.css`) because the route
+behind it is refused — the server denial is the control, and hiding is only there to avoid a
+button that always fails. If a deployment somehow has a non-empty `allowed_domain`, clear it
+against the database; the route that would clear it from the UI is closed too. Do not use the
+domain setting to provision people; send an invitation instead.
+
+The guard (`server/plugins/organization-self-admission.ts`) matches on the path *relative to the
+organization mount point*, not on an absolute URL, so it holds unchanged if the application is
+later served below an `APP_BASE_PATH`. An unrecognised path shape is denied rather than allowed:
+the allow-list names the routes that stay open, and everything else POSTing under the prefix is
+refused.
 
 `AGENT_NATIVE_DISABLE_AUTO_DEV_ACCOUNT=1` disables the localhost "Continue as local dev"
 button so local development uses the seeded users and therefore exercises real roles. The

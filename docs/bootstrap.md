@@ -340,9 +340,11 @@ gh run list --workflow=deploy-staging.yml --limit 5
 
 ### 14. Create the organization
 
-Membership is invite-only and `AUTO_CREATE_DEFAULT_ORG=0` in every environment (D11), so the
-first person to sign in has an account and no organization, and every action fails with
-`No active organization`. Somebody has to write the first membership row.
+Membership is invite-only and `AUTO_CREATE_DEFAULT_ORG=0` in every environment (D11). The app
+also denies the framework's authenticated organization-creation route, its domain-join route and
+the write that would enable domain auto-join, so the first person to sign in has an account and
+no organization, and every action fails with `No active organization`. Somebody has to write the
+first membership row.
 
 1. Open `https://<staging host>` and sign in with Google as the person who will own the
    organization. This also proves the OAuth client and the redirect URI are right.

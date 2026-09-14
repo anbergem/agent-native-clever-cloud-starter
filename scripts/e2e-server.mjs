@@ -23,7 +23,12 @@ const repoRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "..",
 );
-const baseUrl = "http://127.0.0.1:8787";
+// guard:allow-env-credential — E2E_PORT selects a local test listener, never a credential.
+const port = Number(process.env.E2E_PORT ?? "8787");
+if (!Number.isInteger(port) || port < 1 || port > 65535) {
+  throw new Error("E2E_PORT must be an integer from 1 to 65535");
+}
+const baseUrl = `http://127.0.0.1:${port}`;
 const temporary = mkdtempSync(path.join(tmpdir(), "example-jobs-e2e-"));
 const persistTo = path.join(temporary, "wrangler-state");
 const configFile = path.join(temporary, "wrangler.json");
@@ -117,7 +122,7 @@ function cleanup() {
 
 /** Playwright stops the web server with a signal. Terminating the Wrangler
  * process group has to happen even when the signal arrives during migration or
- * seeding, or an orphaned workerd keeps port 8787 and the run hangs. */
+ * seeding, or an orphaned workerd keeps the selected port and the run hangs. */
 async function stop() {
   if (stopped) return;
   stopped = true;
@@ -144,7 +149,7 @@ process.once("SIGTERM", () => void stop());
 try {
   // A leftover file from an earlier run must never look like this server.
   rmSync(stateFile, { force: true });
-  await assertPortAvailable(8787);
+  await assertPortAvailable(port);
   const config = {
     name: "example-jobs-e2e",
     main: path.join(repoRoot, "dist/_worker.js/index.js"),
@@ -194,7 +199,7 @@ try {
       "--ip",
       "127.0.0.1",
       "--port",
-      "8787",
+      `${port}`,
       "--persist-to",
       persistTo,
       "--config",

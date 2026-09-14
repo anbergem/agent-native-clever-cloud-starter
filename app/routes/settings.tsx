@@ -1,5 +1,4 @@
 import { LanguagePicker, useT } from "@agent-native/core/client/i18n";
-import { TeamPage } from "@agent-native/core/client/org";
 import {
   AccountSettingsCard,
   SettingsGroup,
@@ -11,6 +10,7 @@ import {
 import { useSetPageTitle } from "@agent-native/toolkit/app-shell";
 import { useMemo } from "react";
 
+import { InviteOnlyTeamPage } from "@/components/InviteOnlyTeamPage";
 import { APP_TITLE } from "@/lib/app-config";
 
 export function meta() {
@@ -38,7 +38,11 @@ export default function SettingsRoute() {
     <SettingsTabsPage
       account={<AccountSettingsCard />}
       teamLabel={t("navigation.team")}
-      extraTabs={agentSettingsTabs}
+      extraTabs={agentSettingsTabs.map((tab) =>
+        tab.id === "organization"
+          ? { ...tab, content: <InviteOnlyTeamPage /> }
+          : tab,
+      )}
       generalSearchEntries={generalSearchEntries}
       general={
         <div className="mx-auto w-full max-w-2xl space-y-6">
@@ -58,14 +62,6 @@ export default function SettingsRoute() {
               }
             />
           </SettingsGroup>
-        </div>
-      }
-      team={
-        <div className="mx-auto w-full max-w-3xl">
-          <TeamPage
-            showTitle={false}
-            createOrgDescription={t("pages.teamCreateOrgDescription")}
-          />
         </div>
       }
     />

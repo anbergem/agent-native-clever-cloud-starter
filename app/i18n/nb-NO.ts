@@ -150,8 +150,13 @@ const messages = {
   pages: {
     observabilityPageTitle: "Agentobservasjon",
     teamTitle: "Team",
-    teamCreateOrgDescription:
-      "Opprett en organisasjon for å invitere teammedlemmer og dele appen.",
+    teamLoading: "Laster teamtilgang …",
+    teamLoadError: "Kunne ikke laste teamtilgang. Prøv igjen.",
+    teamNoOrganizationTitle: "Organisasjonstilgang kreves",
+    teamNoOrganizationDescription:
+      "Be en administrator om å sende deg en invitasjon til denne organisasjonen.",
+    acceptInvitation: "Godta invitasjon til {{name}}",
+    teamInvitationError: "Kunne ikke godta invitasjonen. Prøv igjen.",
   },
   root: {
     commandActions: "Handlinger",

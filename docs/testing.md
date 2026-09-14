@@ -114,6 +114,9 @@ That last one is the parity claim tested at its cheapest layer: the CLI is a dif
 migrations, seeds, starts `wrangler dev`, runs `scripts/worker-smoke.mjs` against it and then
 removes only its own temporary state.
 
+Playwright uses port 8787 by default. Set `E2E_PORT` to another unused loopback port when a
+separate local Worker already owns it, for example `E2E_PORT=8797 pnpm test:e2e:full`.
+
 ```bash
 node scripts/worker-smoke.mjs --base-url http://127.0.0.1:8787 --mode local \
   --qa-email owner@example.invalid --qa-password "$SEED_PASSWORD" --expect-org-id org_acme

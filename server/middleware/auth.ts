@@ -1,4 +1,5 @@
 import { runAuthGuard } from "@agent-native/core/server";
+import { defineEventHandler } from "h3";
 /**
  * Global auth middleware — runs for ALL requests (page routes, API routes,
  * framework routes). The auth plugin configures the guard; this middleware
@@ -8,8 +9,6 @@ import { runAuthGuard } from "@agent-native/core/server";
  * framework handler's middleware registry is scoped to that catch-all.
  * Page routes (/, /settings) and API routes (/api/*) would bypass auth.
  */
-import { defineEventHandler } from "h3";
-
 export default defineEventHandler(async (event) => {
   return runAuthGuard(event);
 });

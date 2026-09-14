@@ -10,7 +10,8 @@ import {
 import { resetScenario } from "./reset";
 
 const authDirectory = path.resolve("tests/e2e/.auth");
-const fallbackBaseUrl = "http://127.0.0.1:8787";
+// guard:allow-env-credential — E2E_PORT selects a local test listener, never a credential.
+const fallbackBaseUrl = `http://127.0.0.1:${process.env.E2E_PORT ?? "8787"}`;
 
 /** Registers a page with the same-origin assertion (D17: nothing this app
  * serves may phone home). */
