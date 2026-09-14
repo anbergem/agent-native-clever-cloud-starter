@@ -2008,3 +2008,41 @@ Proposed handling: assert what actually matters — that the path is git-ignored
 
 Resolution: 2026-09-11 — changed; the guard passes with the file present and would still fail if
 the ignore rule were removed.
+
+## 2026-09-14 B13 — a Worker var reached staging unset, because wrangler does not inherit `vars`
+
+Expected (plan reference): B13 fixes the non-secret Worker configuration in `wrangler.jsonc`, and
+`AGENT_NATIVE_DISABLE_AUTO_DEV_ACCOUNT: "1"` is part of it — the framework's auto dev account must
+never be reachable in a deployed environment.
+
+Observed, from the first real staging deployment of a template instantiation:
+
+```
+▲ [WARNING] Processing wrangler.jsonc configuration:
+    - "env.staging" environment configuration
+      - The following vars exist at the top level, but not on "env.staging.vars".
+        This is probably not what you want, since "vars" configuration is not inherited
+        by environments.
+        - AGENT_NATIVE_DISABLE_AUTO_DEV_ACCOUNT
+```
+
+The var was declared only in the top-level `vars` block, which applies to the unnamed (local)
+environment. Wrangler does not copy it into `env.staging` or `env.production`, so both deployed
+environments were configured without it, and the only symptom was a warning inside a deploy log
+nobody reads when the deploy succeeds.
+
+Impact: smaller than it first appears, and worth stating precisely rather than alarming. The
+framework's auto dev session also requires `isDevEnvironment()` and a loopback request
+(`dist/server/auth.js`), and both environments set `NODE_ENV=production`, so the door was never
+actually open. What was lost is the defence in depth the flag exists to provide: its whole purpose
+is not to depend on `NODE_ENV` being right.
+
+Proposed handling: set the var explicitly in both environment blocks, and add a rule so the next
+one cannot slip through — `scripts/lib/wrangler-vars.mjs` reports any top-level var key absent from
+a named environment, wired into `scripts/check-config-hygiene.mjs` so `pnpm check` fails on it.
+The rule is absolute, with no exemption list: production's `SEED_ENABLED` was previously *omitted*
+to keep the seed off, and is now spelled `"0"` instead — `env-check` treats absent and `"0"`
+identically, so nothing changes behaviourally and "missing" always means a mistake.
+
+Resolution: 2026-09-14 — applied. `tests/guards/wrangler-vars.test.mjs` covers the rule against
+fixtures and asserts this repository's own config inherits every var.

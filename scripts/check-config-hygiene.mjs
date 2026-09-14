@@ -13,6 +13,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { parseJsonc } from "./lib/jsonc.mjs";
+import { findUninheritedVars } from "./lib/wrangler-vars.mjs";
 
 const repoRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -182,6 +183,8 @@ if (wranglerSource !== null) {
         }
       }
     }
+
+    findings.push(...findUninheritedVars(wrangler));
 
     // Walk the parsed config so the rule is about structure, not about which line a value
     // happens to sit on. Comments are already stripped, so prose is never a finding.
