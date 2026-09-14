@@ -118,7 +118,15 @@ jobs:
         run: pnpm exec wrangler deployments list --env production --json > "$PREVIOUS_DEPLOYMENTS_JSON"
       - run: pnpm db:migrate:production
       - run: pnpm deploy:production
-      - run: node scripts/worker-smoke.mjs --base-url "$PRODUCTION_URL" --mode production
+      # A remote smoke is not a local one: every request crosses the internet to
+      # the Worker and then to remote D1, where the local runs this default was
+      # calibrated against answer from a file in 0-2ms. 120s (the script's
+      # default) was exhausted by the eighth check on the first real staging
+      # smoke (DISCREPANCIES.md, 2026-09-14), including a cold start on the
+      # first request after a fresh deploy.
+      - run: >-
+          node scripts/worker-smoke.mjs --base-url "$PRODUCTION_URL"
+          --mode production --timeout-ms 300000
       - name: Record rollback guidance
         if: failure()
         run: |
