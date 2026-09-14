@@ -2083,3 +2083,38 @@ Resolution: 2026-09-14 — applied to `deploy-staging.yml` and `deploy-productio
 against a deliberately bad credential, which fails in about a second with
 `::error::Cloudflare credentials cannot reach D1 on this account (HTTP 401)` and
 `[10000] Authentication error`. `pnpm lint:workflows` is clean.
+
+## 2026-09-14 B20 — the staging smoke's 120s budget was calibrated on local D1
+
+Expected (plan reference): B20's staging smoke runs the Worker contract against the deployed
+environment after every staging deploy.
+
+Observed: on the first staging deployment that got past the credential problems, the Worker
+deployed cleanly and eight checks passed — ping, D1 health, migrations, sign-in HTML, static shell,
+the unauthenticated 401, QA login and an authenticated read. Then three checks reported
+`The operation was aborted due to timeout`, and the step had run for exactly 120 seconds.
+
+There was one failure, not three. `runSmoke` builds a single `AbortSignal.timeout(options.timeoutMs)`
+and shares it across every check, so the first check to exhaust the run's budget fails and every
+check after it aborts instantly with the same message. `agent chat SSE` and
+`unauthenticated MCP challenge` never ran on their merits; the budget was consumed by
+`reversible write, conflict, undo and isolation`, which is the heaviest check in the suite — create,
+complete, force a version conflict, undo, then probe cross-organization isolation.
+
+Cause: 120s is the script's default, and it was calibrated against `verify:worker`, where the
+Worker and D1 are both local and a query answers in 0-2ms. A remote smoke crosses the internet to
+the Worker and again to remote D1 on every hop, after a cold start on the first request following a
+fresh deploy. The number was inherited from the local case without anyone asking whether it
+transferred.
+
+Impact: a slow check looked like three broken subsystems, and one of the three — `agent chat SSE` —
+is the surface with a known unrelated hang, which made the report actively misleading.
+
+Proposed handling: (1) both deploy workflows pass `--timeout-ms 300000`, with a comment saying why
+a remote budget differs from a local one; (2) `runSmoke` names the check that exhausted the budget
+and reports the rest as `[skip] … not run`, so the cause is legible from the log without reasoning
+about a shared signal.
+
+Resolution: 2026-09-14 — applied. Whether 300s is enough, or whether that check is genuinely stuck
+rather than slow, is not yet known: if it exhausts the larger budget at the same check, the problem
+is a hang and not a timeout, and that is worth knowing either way.

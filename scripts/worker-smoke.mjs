@@ -116,12 +116,33 @@ export async function runSmoke(
     timeoutMs: Math.min(options.timeoutMs, 15_000),
   });
   let failures = 0;
+  // One deadline covers the whole run, so the first check to exhaust it fails
+  // and every check after it aborts instantly with the same message. Reporting
+  // all of them as plain failures made one slow check look like three broken
+  // ones on the first real staging smoke (DISCREPANCIES.md, 2026-09-14). Name
+  // the check that ran out of budget, and mark the rest as not run.
+  let budgetExhaustedBy;
   const check = async (name, fn) => {
+    if (budgetExhaustedBy !== undefined) {
+      failures += 1;
+      log(
+        `[skip] ${name}: not run — the ${options.timeoutMs}ms run budget was already exhausted by "${budgetExhaustedBy}"`,
+      );
+      return;
+    }
+    const started = Date.now();
     try {
       await fn();
       log(`[ok] ${name}`);
     } catch (error) {
       failures += 1;
+      if (deadline.aborted) {
+        budgetExhaustedBy = name;
+        log(
+          `[fail] ${name}: exhausted the ${options.timeoutMs}ms run budget for the whole smoke (this check had ${Date.now() - started}ms of it). Raise --timeout-ms, or find why this check is slow.`,
+        );
+        return;
+      }
       log(
         `[fail] ${name}: ${detail(error instanceof Error ? error.message : error)}`,
       );
