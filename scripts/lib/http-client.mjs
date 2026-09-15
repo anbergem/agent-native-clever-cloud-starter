@@ -29,6 +29,18 @@ export class CookieClient {
     const method = init.method?.toUpperCase() ?? "GET";
     if (method !== "GET" && method !== "HEAD") {
       headers.set("origin", this.baseUrl);
+      // Do not reuse a pooled connection for a write.
+      //
+      // Against a deployed Worker, GETs never failed and POSTs lost their reply
+      // roughly once a run — twice in a row on one — while the Worker's own
+      // trace showed the action completing (`durationMs 214`, outcome ok) and a
+      // guard on the retry proving the first attempt had applied. That is what
+      // connection reuse looks like from `fetch`: undici transparently retries
+      // an idempotent request when the far end closes a pooled connection, so a
+      // GET recovers invisibly, while a POST is not retried and simply waits for
+      // its timeout after the response is lost (DISCREPANCIES.md, 2026-09-15).
+      // A fresh connection per write costs a handshake and removes the window.
+      headers.set("connection", "close");
     }
     // Both ceilings, not either/or. Callers pass a run-wide deadline, and
     // `?? ` meant that deadline *replaced* the per-request timeout — so a single
