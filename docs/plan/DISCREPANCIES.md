@@ -2155,3 +2155,38 @@ name and "The operation was aborted due to timeout" identifies nothing.
 Resolution: 2026-09-15 — applied. `pnpm check` and `pnpm verify:worker` (12/12) pass. What actually
 stalls between a GitHub runner and this Worker is still unknown, and deliberately so: the next
 staging run will name the request instead of the check, which is the evidence that was missing.
+
+## 2026-09-15 B18 — `wrangler dev` exits mid-run and takes the whole browser suite with it
+
+Expected (plan reference): B18's browser suite runs against the built Worker, and a CI failure
+names what went wrong.
+
+Observed: three separate CI runs failed with 15 to 25 identical lines of
+`ENOENT: no such file or directory, open '.wrangler/e2e-worker-state.json'`, each preceded by one
+line nobody looks for: `[WebServer] e2e-server: wrangler dev exited on its own (code 1, null)`.
+Each time a re-run passed. Locally, workerd logs repeated
+`disconnected: ::write(...): Broken pipe` — a browser aborting an in-flight request on navigation —
+before Wrangler gives up.
+
+Cause: two faults compounding. `scripts/e2e-server.mjs` treated any unasked-for Wrangler exit as
+fatal, and its `finally` block deleted the state file on the way out; `resetScenario()` then read
+that path with no guard, so every remaining test reported a missing file rather than a dead server.
+The real event appeared once, in Playwright's `[WebServer]` prefix, above a wall of noise.
+
+Impact: three wasted CI cycles, and each one initially looked like a different problem than it was.
+
+Proposed handling: (1) supervise rather than surrender — an unexpected exit restarts Wrangler up to
+three times and says so. The database lives in `--persist-to`, which survives, so the restart
+resumes against the same seeded data, and Playwright's `retries: 1` under CI covers the tests that
+were in flight. (2) `resetScenario()` checks for the file first and, when it is absent, says the
+Worker is no longer running and points at the `[WebServer]` output, instead of surfacing `ENOENT`.
+
+Resolution: 2026-09-15 — applied and verified by killing the Wrangler process mid-run:
+`wrangler dev exited on its own (code 143, null) — restarting 1/3, database in … is unaffected`,
+after which `/_agent-native/ping` answered 200 and the state file was still present. The full
+browser suite passes (17 tests).
+
+Worth recording for whoever meets this next: the first attempt at that verification killed the
+**workerd** process instead, which Wrangler survives — the supervisor correctly did nothing, the
+port stayed dead, and the test proved nothing. Wrangler exiting and workerd exiting are different
+failures; only the first is handled here, because only the first is the one CI has shown.

@@ -1,5 +1,11 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -41,6 +47,15 @@ function scenarioSql(): ScenarioSql {
 /** Restore deterministic organizations and application rows without touching
  * framework user/session tables. Browser sessions therefore remain real. */
 export function resetScenario(): void {
+  // `scripts/e2e-server.mjs` deletes this file when it stops. Reading it with
+  // no explanation turned a dead Worker into 25 identical `ENOENT` lines naming
+  // a path, three times over (DISCREPANCIES.md, 2026-09-15). Say what absence
+  // means, and where the real cause is.
+  if (!existsSync(WORKER_STATE_FILE)) {
+    throw new Error(
+      `e2e state file is gone (${WORKER_STATE_FILE}). scripts/e2e-server.mjs removes it when it stops, so the Worker behind these tests is no longer running — look for "wrangler dev exited on its own" in the [WebServer] output above, not for a missing file.`,
+    );
+  }
   const { configFile, persistTo } = JSON.parse(
     readFileSync(WORKER_STATE_FILE, "utf8"),
   ) as {
