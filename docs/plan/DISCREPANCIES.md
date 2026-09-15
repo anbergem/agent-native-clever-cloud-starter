@@ -2362,3 +2362,36 @@ Resolution: 2026-09-15 — applied; `pnpm check` passes. The template's own `pac
 spells the staging database name in `db:migrate:staging`, which is a second copy of the same fact —
 left alone here because `wrangler d1 migrations apply` takes the name as an argument, but worth
 revisiting if it drifts too.
+
+## 2026-09-15 D06 — the deploy seeds before the framework has created its tables
+
+Expected (plan reference): D06 and F8 give the schema two owners — the app's migrations, applied by
+`wrangler d1 migrations apply`, and the framework's own tables (`organizations`, `org_members`, the
+audit log), which it creates at runtime on the first request that touches the database. T11 already
+recorded that the seed must run after the app has touched the database.
+
+Observed: on a genuinely new staging database the deploy failed in `Reset QA scenario`:
+
+```
+🌀 Executing on remote database acme-ops-staging (ccbfda85-…)
+✘ [ERROR] no such table: org_members: SQLITE_ERROR
+```
+
+The workflow's order is migrate → deploy → reset → smoke. Migration creates the app's tables only;
+deployment serves no request; so the reset is the first thing to touch the database, and the
+framework's tables do not exist yet.
+
+Impact: the deploy pipeline could never bootstrap a fresh environment — the exact path a new
+installation of this template takes. It went unnoticed because every previous staging deploy ran
+against a database that earlier smoke attempts had already woken, which is a property of this
+repository's history rather than of the pipeline.
+
+Proposed handling: a step between deploy and reset that polls `/_agent-native/health` until it
+reports `"db":true`, bounded to 30 attempts. That is the framework's own readiness endpoint, it is
+public, and reaching it is what makes the framework create its tables. Failure says why the seed
+would have failed rather than leaving `no such table` as the first sign.
+
+Resolution: 2026-09-15 — applied to `deploy-staging.yml`; `pnpm lint:workflows` is clean. Production
+does not need it: its first deploy is a promotion of an artifact that staging has already exercised,
+and `bootstrap-org.mjs` is a manual step the operator runs after signing in, which is itself a
+request that touches the database.

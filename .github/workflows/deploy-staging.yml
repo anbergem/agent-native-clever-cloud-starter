@@ -100,6 +100,27 @@ jobs:
           retention-days: 90
       - run: pnpm db:migrate:staging
       - run: pnpm deploy:staging
+      # The framework owns `organizations`, `org_members` and the audit log, and
+      # creates them at runtime on the first request that touches the database
+      # (D06, F8) — `db:migrate:staging` only applies the app's own migrations.
+      # Seeding before that happens fails with `no such table: org_members`,
+      # which is what a brand-new staging database did on its first deploy
+      # (DISCREPANCIES.md, 2026-09-15). An existing database hides this, because
+      # some earlier request already woke it.
+      - name: Wait for the framework to create its tables
+        run: |
+          for attempt in $(seq 1 30); do
+            body=$(curl -sS --max-time 20 "$STAGING_URL/_agent-native/health" || true)
+            case "$body" in
+              *'"db":true'*)
+                echo "database reachable after $attempt attempt(s)"
+                exit 0
+                ;;
+            esac
+            sleep 2
+          done
+          echo "::error::the Worker never reported a healthy database; the seed would fail on the framework's own tables"
+          exit 1
       - name: Reset QA scenario
         run: >-
           node scripts/seed.mjs --target d1-remote --env staging --reset
