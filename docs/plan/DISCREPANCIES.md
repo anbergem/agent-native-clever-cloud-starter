@@ -2311,6 +2311,18 @@ nothing to keep resident. `bootstrap.mjs` now creates production with `--jurisdi
 staging without, `tests/guards/bootstrap.test.mjs` asserts exactly that asymmetry, and
 `docs/bootstrap.md` explains the reasoning and how to pin both if your CI runs in the EU.
 
-Resolution: 2026-09-15 — applied to the template. An existing staging database cannot be moved:
-jurisdiction is fixed at creation, so a deployment that already has a pinned staging database has
-to create a new one and repoint `wrangler.jsonc`.
+Correction, same day, from actually running it: creating a database *without* `--jurisdiction`
+still produced `Successfully created DB 'acme-ops-staging-2' in region EEUR`. D1 places a new
+database near whoever runs the command, so dropping the pin does not move it — a European
+maintainer gets EEUR either way. `wrangler d1 create --help` supplies the missing half: there is a
+`--location` hint (`weur`, `eeur`, `apac`, `oc`, `wnam`, `enam`), and "if jurisdictions are set,
+the location hint is ignored". So removing the jurisdiction is what *permits* a hint; the hint is
+what actually moves the database. The first version of this fix would have changed nothing
+measurable.
+
+Resolution: 2026-09-15 — `bootstrap.mjs` creates production with `--jurisdiction eu`, and staging
+unpinned plus an optional `--location` from `STAGING_D1_LOCATION`, validated against D1's six
+choices and empty by default (D1 chooses, near you). `.bootstrap.env.example` explains that
+GitHub-hosted runners are in the United States, so a European maintainer usually wants `enam`.
+An existing database cannot be moved — neither jurisdiction nor location is changeable after
+creation — so an existing deployment has to create a new one and repoint `wrangler.jsonc`.

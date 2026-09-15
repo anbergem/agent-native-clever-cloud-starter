@@ -260,8 +260,11 @@ Read it. In particular:
   scenario (`Example Customer A`, addresses at `example.invalid`), so there is nothing to keep
   resident. Pinning staging cost more than it bought — a US GitHub runner reaches a US Cloudflare
   colo, which then queries a database `running_in_region EEUR`, and the same `create-job` measured
-  468ms from a European machine against 2s to over 60s from a runner, reads included. If your CI
-  runs in the EU, or you want staging pinned anyway, add `--jurisdiction eu` for both in
+  468ms from a European machine against 2s to over 60s from a runner, reads included. Removing the
+  pin is only half of it: D1 places a new database near whoever runs the command, so set
+  `STAGING_D1_LOCATION` (`enam` for GitHub-hosted runners) to put staging near the CI that smokes
+  it. A jurisdiction makes D1 ignore the location hint, which is why the two cannot be combined.
+  If your CI runs in the EU, or you want staging pinned anyway, add `--jurisdiction eu` for both in
   `scripts/bootstrap.mjs` first.
 - It will run `pnpm build:worker` and `wrangler deploy` once per environment, because
   `wrangler secret put` requires the Worker to exist. That first deployment is the only one
