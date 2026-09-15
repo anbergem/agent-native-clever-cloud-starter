@@ -2472,3 +2472,32 @@ exposure exists in principle for `complete-job`, which is also version-guarded: 
 followed by a retry would answer `409` and fail the same way. It is left alone deliberately —
 unobserved, and guessing at a second recovery path without a failure to read would be inventing
 requirements. If it appears, the pattern above is the one to copy.
+
+## 2026-09-15 B11 — the same exposure, on the next run, for `complete-job`
+
+Expected (previous entry): `complete-job` shares `undo-operation`'s exposure to a lost response in
+principle, and was left alone as unobserved.
+
+Observed, on the very next staging run:
+
+```
+[retry] create-job: no response (…failed after 45000ms at most)
+[retry] complete-job: no response (…failed after 45000ms at most)
+[fail]  reversible write…: HTTP 409: {"error":"The job was changed by someone else","errorCode":"CONFLICT"}
+```
+
+Two lost replies in a single run. `create-job` recovered by itself — its idempotency key made the
+replay return the same resource, which is B11 working exactly as intended. `complete-job` did not:
+the first attempt had applied and moved the version, so the retry met the version guard.
+
+Impact on the judgement, not just the code: "unobserved, so leave it" was the wrong call at a rate
+of roughly one lost reply per run. The evidence for the second case was one run away, and the cost
+of waiting was another full deploy cycle.
+
+Proposed handling: one helper, `guardedCommand`, replacing the undo-only recovery. On a `409` after
+a retry it re-reads the job through `get-job` **and** recovers the operation id from
+`list-recent-activity`, because the caller needs that id to undo what it just did — a detail the
+undo-only version did not have to solve.
+
+Resolution: 2026-09-15 — applied to `complete-job` and `undo-operation`; `pnpm check` and
+`pnpm verify:worker` (12/12) pass. `create-job` needs nothing: idempotent replay is its recovery.
