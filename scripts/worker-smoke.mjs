@@ -322,9 +322,29 @@ export async function runSmoke(
         { jobId: created.resource.id, expectedVersion: 1 },
         409,
       );
-      const undone = await action("undo-operation", {
-        operationId: completed.operationId,
-      });
+      // A lost response is not a lost write. When the retry above answers
+      // `409 Already undone`, the first attempt reached the Worker and applied —
+      // B11's guard refusing the duplicate is the system working, not failing,
+      // and observed on staging (DISCREPANCIES.md, 2026-09-15). Assert on the
+      // record rather than on the reply that happened to survive.
+      let undone;
+      try {
+        undone = await action("undo-operation", {
+          operationId: completed.operationId,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (!message.includes("HTTP 409")) throw error;
+        log(
+          "[recovered] undo-operation: a lost response had already applied; reading the job back",
+        );
+        undone = await client
+          .json(
+            `/_agent-native/actions/get-job?jobId=${encodeURIComponent(created.resource.id)}`,
+            { signal: deadline },
+          )
+          .then((result) => ({ resource: result.body }));
+      }
       assert(
         undone?.resource?.status === "scheduled",
         `undo: ${detail(undone)}`,

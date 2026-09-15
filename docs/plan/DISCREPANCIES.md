@@ -2438,3 +2438,37 @@ behaviour itself is **not explained**, and the retry does not explain it. What i
 where it is not: not the application, not the database's region, not the seeding order. If it turns
 out to matter for real users — a browser POST losing its response would be visible as a hung save —
 this deserves a proper investigation with Cloudflare rather than a tolerant test client.
+
+## 2026-09-15 B11 — the retry proved the writes arrive, and disproved the argument for retrying
+
+Expected (previous entry): retrying a lost POST is safe because creates carry an idempotency key
+and every other command is guarded on `expectedVersion`, so a duplicate is refused rather than
+applied twice.
+
+Observed, on the first staging run with that retry:
+
+```
+[retry] undo-operation: no response (POST …/undo-operation failed after 45000ms at most)
+[fail]  reversible write…: HTTP 409: {"error":"Already undone","errorCode":"CONFLICT"}
+```
+
+The claim was half right, and the half that was wrong is the important one. B11's guard did exactly
+its job: the first `undo-operation` **reached the Worker and applied**, and the duplicate was
+refused. The data was never at risk. But the smoke asserts the retry's status, so a guard working
+correctly reads as a failure — the retry converted a lost response into a false negative rather
+than recovering from it.
+
+It also settles what the transport problem is. The request arrives and is processed; only the
+reply is lost. That is now observed twice: once through `wrangler tail` (`create-job … outcome ok,
+durationMs 214` with no reply reaching the client) and once here, where the state change survives
+into a subsequent request.
+
+Proposed handling: after a lost response, assert on the **record**, not on the reply that happened
+to survive. The undo step now catches a `409` following a retry, logs `[recovered] undo-operation`,
+re-reads the job through `get-job` and asserts the status there.
+
+Resolution: 2026-09-15 — applied; `pnpm check` and `pnpm verify:worker` (12/12) pass. The same
+exposure exists in principle for `complete-job`, which is also version-guarded: a lost response
+followed by a retry would answer `409` and fail the same way. It is left alone deliberately —
+unobserved, and guessing at a second recovery path without a failure to read would be inventing
+requirements. If it appears, the pattern above is the one to copy.
