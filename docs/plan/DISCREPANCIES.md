@@ -2227,3 +2227,48 @@ over the public internet.
 Resolution: 2026-09-15 — applied; `pnpm check` and `pnpm verify:worker` (12/12) pass. Whether 45s
 is enough is not proven: the next staging run is the test, and if `create-job` still exceeds it
 the problem is not cold-start latency and the hunt resumes with better numbers than before.
+
+## 2026-09-15 B20 — `create-job` hangs only in the smoke, and the agent errors on staging
+
+Expected (plan reference): with a 45s per-request ceiling (previous entry) a cold deployment has
+room to answer, and the staging smoke should pass.
+
+Observed, on the first run with that ceiling:
+
+```
+[ok]   authenticated list-jobs
+[fail] reversible write…: POST /_agent-native/actions/create-job failed after 45000ms at most
+[fail] agent chat SSE: stream began with error:
+       {"type":"error","error":"Cannot read properties of undefined (reading 'stream')","seq":4}
+[ok]   unauthenticated MCP challenge
+```
+
+Two separate findings, and the first refutes the cold-start explanation the ceiling was based on.
+
+**1. `create-job` does not finish in 45s — but only inside the smoke.** The same call, against the
+same deployment, succeeded from a GitHub runner in 2203ms and 1518ms in the throwaway diagnostic
+job, and in 468ms from a developer machine. Three environments where it works, one where it does
+not. The distinguishing feature is what runs immediately before it: the smoke starts **zero
+seconds** after `Reset QA scenario` finishes (18:15:44 → 18:15:44), and that step is
+`seed.mjs --target d1-remote --reset`, a bulk delete-and-reinsert against the same remote D1. The
+diagnostic job ran standalone with no preceding reset. That makes "the first write after a bulk
+remote reset does not complete" the hypothesis the evidence actually supports — untested, and to be
+tested rather than believed, given how many hypotheses this thread has already buried.
+
+**2. The deployed agent chat fails with a TypeError**, not a timeout: `Cannot read properties of
+undefined (reading 'stream')` at `seq 4`. With a longer ceiling the stream opens and then errors,
+which is new: previously it only ever timed out. This is a real defect on a deployed Worker and may
+share a root with the agent-chat hang recorded under local `wrangler dev` (2026-09-11), where the
+request died on a D1 query that never returned. It is not explained by anything in this repository's
+code so far.
+
+Impact: staging still does not go green, but neither failure indicts the application as exercised by
+hand — every action works from a developer machine and from a runner outside the smoke.
+
+Proposed handling: (1) test the reset hypothesis by adding the same remote reset to the throwaway
+diagnostic immediately before `create-job`; if it reproduces, the smoke needs to wait for D1 to
+settle, or the reset needs to be gentler. (2) Capture the agent-chat TypeError as its own upstream
+report — it is a framework stack, not ours.
+
+Resolution: open. Recorded so the next person starts from the evidence rather than from the three
+wrong hypotheses that preceded it.
