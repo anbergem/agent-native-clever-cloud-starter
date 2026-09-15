@@ -2501,35 +2501,3 @@ undo-only version did not have to solve.
 
 Resolution: 2026-09-15 — applied to `complete-job` and `undo-operation`; `pnpm check` and
 `pnpm verify:worker` (12/12) pass. `create-job` needs nothing: idempotent replay is its recovery.
-
-## 2026-09-15 B20 — lost POST replies are connection reuse, not the network
-
-Expected (previous entries): a single retry covers a lost reply.
-
-Observed: on the next run `create-job` lost its reply **twice in a row**, so the retry timed out
-too. Across every staging run the shape is constant:
-
-- GETs never fail. `ping`, `health`, `list-jobs`, `list-customers`, `get-job`: hundreds of calls,
-  no losses.
-- POSTs lose their reply roughly once a run, sometimes twice.
-- The Worker processes them anyway — `wrangler tail` showed `create-job … outcome ok,
-  durationMs 214` with no reply reaching the client, and a guard on a retry proved a lost
-  `undo-operation` had applied.
-
-That is the signature of connection reuse rather than a network fault. Node's `fetch` (undici)
-pools connections and transparently retries an **idempotent** request when the far end closes one,
-so a GET recovers invisibly; a POST is never retried, so when the edge closes a pooled connection
-after the Worker has handled the request, the client waits out its timeout having lost only the
-response. It explains every observation, including why the work is done and why raising timeouts,
-moving the database and changing the seed order all failed to help.
-
-Proposed handling: send `connection: close` on every non-GET, so a write never rides a pooled
-connection. It costs a handshake per write and removes the window entirely. The retry and the
-`guardedCommand` read-back stay: they are correct regardless of the cause, and they are what
-surfaced it.
-
-Resolution: 2026-09-15 — applied; `pnpm check` and `pnpm verify:worker` (12/12) pass. Whether this
-ends the losses is for the next staging run to say. What it does not address is the same exposure
-in a **browser**: if a real user's POST can lose its reply this way, a save would appear to hang
-while having succeeded. That is worth knowing independently of CI, and is not something a test
-client's header can fix.
