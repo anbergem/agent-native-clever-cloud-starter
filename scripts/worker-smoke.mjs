@@ -111,9 +111,16 @@ export async function runSmoke(
   { fetchImpl = fetch, log = console.log } = {},
 ) {
   const deadline = AbortSignal.timeout(options.timeoutMs);
+  // 15s is generous against a local Worker, where every request answers in
+  // milliseconds, and tight against one that was deployed seconds ago: a runner
+  // measured 5.1s for a bare `ping` and 6.1s for a login on a cold Worker,
+  // settling to 1-2s once warm (DISCREPANCIES.md, 2026-09-15). A remote smoke
+  // runs in exactly that cold window, so it gets a ceiling to match while the
+  // local one keeps the tight bound that makes a genuine hang obvious fast.
+  const requestTimeoutMs = options.mode === "local" ? 15_000 : 45_000;
   const client = new CookieClient(options.baseUrl, {
     fetchImpl,
-    timeoutMs: Math.min(options.timeoutMs, 15_000),
+    timeoutMs: Math.min(options.timeoutMs, requestTimeoutMs),
   });
   let failures = 0;
   // One deadline covers the whole run, so the first check to exhaust it fails

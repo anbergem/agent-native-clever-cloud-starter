@@ -2190,3 +2190,40 @@ Worth recording for whoever meets this next: the first attempt at that verificat
 **workerd** process instead, which Wrangler survives — the supervisor correctly did nothing, the
 port stayed dead, and the test proved nothing. Wrangler exiting and workerd exiting are different
 failures; only the first is handled here, because only the first is the one CI has shown.
+
+## 2026-09-15 B20 — the smoke's per-request ceiling was a third local-calibrated constant
+
+Expected (plan reference): B20's staging smoke exercises the deployed Worker and fails only when
+the deployment is wrong.
+
+Observed: with per-request timeouts in place (previous entry) the staging smoke finally named its
+victims — `POST /_agent-native/actions/create-job` and `POST /_agent-native/agent-chat`, each
+`failed after 15000ms at most`, while `auth/login` (also a POST, also a write) and every read
+passed. A throwaway `workflow_dispatch` job then ran the same requests from a GitHub runner:
+
+```
+GET  ping                      200   5149ms  colo=SJC
+GET  health                    200   4746ms  colo=SJC
+POST auth/login                200   6117ms  colo=SJC
+GET  list-customers            200   1761ms  colo=SJC
+POST create-job (atomicBatch)  200   2203ms  colo=SJC
+POST create-job (60s ceiling)  200   1518ms  colo=SJC
+```
+
+Everything works from a runner, batch writes included. That kills the hypothesis the previous
+entry left open — that D1's `atomicBatch` fails from CI — and points instead at the *cold* numbers:
+a bare `ping` took 5.1s and a login 6.1s on a Worker that had just been deployed, settling to 1-2s
+once warm. The same login from a developer machine takes 865ms.
+
+Cause: `runSmoke` capped every request at `Math.min(options.timeoutMs, 15_000)`, irrespective of
+`--timeout-ms`. That is the third constant in this file calibrated against a local Worker — after
+the 120s run budget and the per-request ceiling that never applied at all. The staging smoke runs
+seconds after `wrangler deploy`, which is precisely the cold window.
+
+Proposed handling: keep 15s for `--mode local`, where a slow request means a real hang and a tight
+bound surfaces it quickly, and allow 45s for a remote smoke, which runs against a cold deployment
+over the public internet.
+
+Resolution: 2026-09-15 — applied; `pnpm check` and `pnpm verify:worker` (12/12) pass. Whether 45s
+is enough is not proven: the next staging run is the test, and if `create-job` still exceeds it
+the problem is not cold-start latency and the hunt resumes with better numbers than before.
