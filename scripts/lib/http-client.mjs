@@ -30,11 +30,32 @@ export class CookieClient {
     if (method !== "GET" && method !== "HEAD") {
       headers.set("origin", this.baseUrl);
     }
-    const response = await this.fetchImpl(new URL(path, `${this.baseUrl}/`), {
-      ...init,
-      headers,
-      signal: init.signal ?? AbortSignal.timeout(this.timeoutMs),
-    });
+    // Both ceilings, not either/or. Callers pass a run-wide deadline, and
+    // `?? ` meant that deadline *replaced* the per-request timeout — so a single
+    // hung request could consume the whole budget, and the report blamed the
+    // check rather than naming the call. One 292s request inside a 300s staging
+    // smoke is what that looked like (DISCREPANCIES.md, 2026-09-15).
+    const signal = init.signal
+      ? AbortSignal.any([init.signal, AbortSignal.timeout(this.timeoutMs)])
+      : AbortSignal.timeout(this.timeoutMs);
+    let response;
+    try {
+      response = await this.fetchImpl(new URL(path, `${this.baseUrl}/`), {
+        ...init,
+        headers,
+        signal,
+      });
+    } catch (error) {
+      // A bare "The operation was aborted due to timeout" says nothing about
+      // which call stalled, and the check wrapper only knows the check's name.
+      // Name the request here, where the method and path are in hand.
+      const cause = error instanceof Error ? error.message : String(error);
+      const failure = new Error(
+        `${method} ${path} failed after ${this.timeoutMs}ms at most: ${cause}`,
+      );
+      failure.cause = error;
+      throw failure;
+    }
     const setCookies = response.headers.getSetCookie?.() ?? [];
     for (const value of setCookies) {
       const pair = value.split(";", 1)[0];
