@@ -2501,3 +2501,40 @@ undo-only version did not have to solve.
 
 Resolution: 2026-09-15 — applied to `complete-job` and `undo-operation`; `pnpm check` and
 `pnpm verify:worker` (12/12) pass. `create-job` needs nothing: idempotent replay is its recovery.
+
+## 2026-09-15 B20 — connection reuse was not it either; stopping the local hunt
+
+Expected (previous entry): sending `connection: close` on writes would remove the window in which a
+pooled connection is closed after the Worker has handled a request.
+
+Observed: no change. `create-job` still lost both its attempts on the next staging run. The theory
+is dead, and the change is reverted rather than left in on the strength of it — a handshake per
+write is a real cost and it bought nothing.
+
+Five explanations have now been tested against evidence and refuted: cold start (a 45s ceiling
+failed identically), geography (moving the database from EEUR to ENAM changed nothing), the QA
+reset (a baseline phase with no reset behaves the same), D1's `atomicBatch` (the same call
+succeeds from a runner standalone), and connection reuse (this entry).
+
+What is established, and is not in doubt:
+
+- **The application is correct.** `wrangler tail` shows `create-job … outcome ok, durationMs 214`.
+  Every action works from a developer machine in under 500ms, and works from a GitHub runner in the
+  standalone diagnostic.
+- **Writes land even when replies do not.** A lost `undo-operation` was proven applied by the
+  guard that refused its retry.
+- **It is specific to POSTs against the action endpoints.** GETs through the same endpoints have
+  not failed once across hundreds of calls, and `POST /_agent-native/auth/login` has never failed
+  either — so "POST" alone does not describe it.
+- **`agent chat SSE` fails independently**, either with the same lost reply or with
+  `Cannot read properties of undefined (reading 'stream')`, which is a framework stack.
+
+What remains in the smoke is justified on its own terms regardless of cause: one retry for a lost
+reply, and `guardedCommand` asserting on the record rather than on whichever reply survived. Both
+are correct behaviour for a client that cannot assume a response arrives, and they are what made
+the mechanism visible in the first place.
+
+Resolution: the local hunt stops here. Continuing to iterate against a deployed environment, a
+cycle at a time, has passed the point where it produces knowledge. The next move is an upstream
+report carrying this evidence — the tail output, the timings, the five refutations — and a decision
+about whether a staging smoke should gate deploys while it runs across a path that loses replies.
