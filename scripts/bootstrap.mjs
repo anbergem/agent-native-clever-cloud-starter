@@ -652,6 +652,24 @@ function stepD1(ctx) {
   for (const environment of ENVIRONMENTS) {
     const name = `${inputs.APP_NAME}-${environment}`;
     let existing = databases.find((database) => database?.name === name);
+    // Jurisdiction is a data-residency control, and it costs latency to anything
+    // outside that region. Production holds real people's data and is pinned to
+    // the EU. Staging holds only the synthetic scenario — `Example Customer A`,
+    // addresses at `example.invalid` — so there is nothing to keep resident, and
+    // pinning it made every CI request cross the Atlantic: a US GitHub runner
+    // reaches a US Cloudflare colo, which then talks to a database
+    // `running_in_region EEUR`. Measured, the same `create-job` took 468ms from
+    // a European machine and between 2s and over 60s from a runner, reads
+    // included, which no smoke timeout can paper over
+    // (DISCREPANCIES.md, 2026-09-15).
+    const createArgs =
+      environment === "production"
+        ? ["d1", "create", name, "--jurisdiction", "eu"]
+        : ["d1", "create", name];
+    const residency =
+      environment === "production"
+        ? "EU jurisdiction"
+        : "no jurisdiction pin (synthetic data only, keeps CI close to the runner)";
     if (existing) {
       record(
         "d1",
@@ -660,16 +678,12 @@ function stepD1(ctx) {
         `id ${existing.uuid}`,
       );
     } else if (!ctx.apply) {
-      record("d1", `database ${name}`, "would create", "EU jurisdiction");
-      showCommand("wrangler", ["d1", "create", name, "--jurisdiction", "eu"]);
+      record("d1", `database ${name}`, "would create", residency);
+      showCommand("wrangler", createArgs);
     } else {
-      const created = run(
-        "wrangler",
-        ["d1", "create", name, "--jurisdiction", "eu"],
-        {
-          env: cloudflareEnv(inputs),
-        },
-      );
+      const created = run("wrangler", createArgs, {
+        env: cloudflareEnv(inputs),
+      });
       if (created.status !== 0) {
         refuse(
           `\`wrangler d1 create ${name}\` failed: ${created.stderr.trim()}`,

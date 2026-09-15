@@ -2272,3 +2272,45 @@ report — it is a framework stack, not ours.
 
 Resolution: open. Recorded so the next person starts from the evidence rather than from the three
 wrong hypotheses that preceded it.
+
+## 2026-09-15 D18 — staging's EU jurisdiction is why CI could never smoke it
+
+Expected (plan reference): D18 and T24 create both D1 databases with `--jurisdiction eu`, and B20's
+staging smoke exercises the deployed Worker after every deploy.
+
+Observed: the smoke's `create-job` failed at a 15s ceiling, then at 45s. A throwaway diagnostic then
+measured the same request from a GitHub runner across several dispatches: 2037ms, 1677ms, 2203ms,
+1518ms, 6134ms — and NO RESPONSE at 20s and at 60s, with a plain `list-customers` read also timing
+out at 20s on one pass. From a European developer machine the same call is 468ms every time. The
+hypothesis that the QA reset caused it did not survive: a baseline probe with no reset at all
+timed out too, and a post-reset probe succeeded.
+
+Cause, from `wrangler d1 info`:
+
+```
+name               acme-ops-staging
+running_in_region  EEUR
+jurisdiction       eu
+```
+
+and from the runner, `Azure Region: centralus`, serving colos SJC, ATL and IAD. Every CI request is
+a US runner reaching a US Cloudflare colo that then queries a database in Eastern Europe.
+`create-job` makes several sequential D1 round trips — the idempotency lookup, then the atomic
+batch — so it pays that crossing several times, with the variance a shared transatlantic path has.
+No smoke timeout fixes this: it is the deployment's shape, not a bug, and the numbers above cross
+an order of magnitude.
+
+Impact: the staging smoke could never be reliable, and three rounds of timeout-raising treated the
+symptom. Production is unaffected — EU users reach EU colos reaching an EU database, which is the
+arrangement the jurisdiction exists for.
+
+Proposed handling: keep the pin where it means something and drop it where it does not.
+Jurisdiction is a data-residency control; production holds real people's data and stays `eu`, while
+staging holds only the synthetic scenario (`Example Customer A`, `example.invalid`), so there is
+nothing to keep resident. `bootstrap.mjs` now creates production with `--jurisdiction eu` and
+staging without, `tests/guards/bootstrap.test.mjs` asserts exactly that asymmetry, and
+`docs/bootstrap.md` explains the reasoning and how to pin both if your CI runs in the EU.
+
+Resolution: 2026-09-15 — applied to the template. An existing staging database cannot be moved:
+jurisdiction is fixed at creation, so a deployment that already has a pinned staging database has
+to create a new one and repoint `wrangler.jsonc`.

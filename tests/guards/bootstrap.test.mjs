@@ -500,7 +500,10 @@ test("--plan reports every step, performs no mutating call and redacts every sec
   );
   assert.match(
     run.stdout,
-    /\$ wrangler d1 create example-jobs-staging --jurisdiction eu/,
+    // Staging carries only synthetic data and is left unpinned so CI is not
+    // a trans-Atlantic round trip per request; production is pinned to the EU.
+    /\$ wrangler d1 create example-jobs-staging(?! --jurisdiction)/,
+    /\$ wrangler d1 create example-jobs-production --jurisdiction eu/,
   );
   assert.match(run.stdout, /\$ pnpm build:worker/);
   assert.match(run.stdout, /Re-run with --yes to perform it\./);
@@ -534,7 +537,7 @@ test("--yes issues exactly the expected argument arrays and stdin bodies", () =>
 
   for (const expected of [
     ">>> wrangler [d1] [list] [--json]",
-    ">>> wrangler [d1] [create] [example-jobs-staging] [--jurisdiction] [eu]",
+    ">>> wrangler [d1] [create] [example-jobs-staging]",
     ">>> wrangler [d1] [create] [example-jobs-production] [--jurisdiction] [eu]",
     ">>> wrangler [deployments] [list] [--env] [staging] [--json]",
     ">>> pnpm [build:worker]",

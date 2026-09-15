@@ -27,7 +27,7 @@ with `--only <step>`.
 | 1 | Rename the application | You: `scripts/rename-app.mjs` (step 5 below) |
 | 2 | Update package metadata | You: same script, plus the `description` field |
 | 3 | Configure the Cloudflare account | You: Paid plan and API token (steps 1–2) |
-| 4 | Create staging D1 in the EU jurisdiction | Script: `d1` |
+| 4 | Create staging D1 (no jurisdiction pin) | Script: `d1` |
 | 5 | Create production D1 in the EU jurisdiction | Script: `d1` |
 | 6 | Configure Worker bindings | Script: `d1` (writes `database_id` and `APP_URL`) |
 | 7 | Configure staging/production secrets | Script: `worker-secrets` |
@@ -254,8 +254,14 @@ it would do, with the exact command underneath and every secret shown as `<redac
 
 Read it. In particular:
 
-- It will create two D1 databases in the **EU** jurisdiction. Jurisdiction cannot be changed
-  later; if you need another one, edit the `--jurisdiction` argument in
+- It will create the **production** database in the **EU** jurisdiction, and staging with no
+  jurisdiction pin. That asymmetry is deliberate. Jurisdiction is a data-residency control:
+  production holds real people's data and stays in the EU; staging holds only the synthetic
+  scenario (`Example Customer A`, addresses at `example.invalid`), so there is nothing to keep
+  resident. Pinning staging cost more than it bought — a US GitHub runner reaches a US Cloudflare
+  colo, which then queries a database `running_in_region EEUR`, and the same `create-job` measured
+  468ms from a European machine against 2s to over 60s from a runner, reads included. If your CI
+  runs in the EU, or you want staging pinned anyway, add `--jurisdiction eu` for both in
   `scripts/bootstrap.mjs` first.
 - It will run `pnpm build:worker` and `wrangler deploy` once per environment, because
   `wrangler secret put` requires the Worker to exist. That first deployment is the only one
