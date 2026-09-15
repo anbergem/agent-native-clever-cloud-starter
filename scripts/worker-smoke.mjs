@@ -155,12 +155,38 @@ export async function runSmoke(
       );
     }
   };
+  // One retry, and only when a request produced no response at all.
+  //
+  // Against a deployed Worker a POST occasionally never returns, while the
+  // Worker's own trace shows the action completing normally —
+  // `create-job … outcome ok, durationMs 214` — with no exception logged, and a
+  // repeat of the same call succeeding in about three seconds. Whatever loses
+  // the response sits between the runner and the edge, not in the application,
+  // and a smoke that fails on it reports a defect that does not exist
+  // (DISCREPANCIES.md, 2026-09-15).
+  //
+  // Retrying a command is safe here by design rather than by luck: creates
+  // carry an idempotency key and replay to the same resource, and every other
+  // command is guarded on `expectedVersion`, so a duplicate delivery is refused
+  // rather than applied twice (B11). A retry that reaches a Worker which did
+  // process the first attempt therefore still asserts the truth.
   const action = async (name, body, expected = 200, activeClient = client) => {
-    const result = await activeClient.json(`/_agent-native/actions/${name}`, {
-      method: "POST",
-      body,
-      signal: deadline,
-    });
+    let result;
+    try {
+      result = await activeClient.json(`/_agent-native/actions/${name}`, {
+        method: "POST",
+        body,
+        signal: deadline,
+      });
+    } catch (error) {
+      if (deadline.aborted) throw error;
+      log(`[retry] ${name}: no response (${detail(error?.message ?? error)})`);
+      result = await activeClient.json(`/_agent-native/actions/${name}`, {
+        method: "POST",
+        body,
+        signal: deadline,
+      });
+    }
     assert(
       result.response.status === expected,
       `HTTP ${result.response.status}: ${detail(result.body)}`,

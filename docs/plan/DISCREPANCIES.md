@@ -2395,3 +2395,46 @@ Resolution: 2026-09-15 — applied to `deploy-staging.yml`; `pnpm lint:workflows
 does not need it: its first deploy is a promotion of an artifact that staging has already exercised,
 and `bootstrap-org.mjs` is a manual step the operator runs after signing in, which is itself a
 request that touches the database.
+
+## 2026-09-15 B20 — a deployed POST sometimes returns nothing, while the Worker says it succeeded
+
+Expected (plan reference): B20's staging smoke fails when the deployment is wrong.
+
+Observed, after the database was moved to ENAM and the seeding order fixed, across three diagnostic
+phases on the same run:
+
+| Phase | first `create-job` | second `create-job` |
+| --- | --- | --- |
+| 1 | no response (20s) | 200 in 3778ms |
+| 2 | no response (20s) | no response (60s) |
+| 3 | no response (20s) | 200 in 2612ms |
+
+Reads in the same sessions answered in 128-390ms throughout. Geography is not the explanation: the
+database now sits in ENAM, the same continent as the runner, and the pattern is unchanged from
+EEUR. Nor is it the QA reset: a baseline phase with no reset behaves identically.
+
+A run with `wrangler tail` attached caught the Worker's own view of a first write that did answer:
+
+```
+{"u":"/_agent-native/actions/create-job","o":"ok","ex":[],
+ "lg":["{\"action\":\"create-job\",\"outcome\":\"success\",\"caller\":\"http\",\"durationMs\":214}"]}
+```
+
+**214ms server-side, no exception, outcome ok.** When the same call produces no response there is no
+trace event at all and nothing logged. So the application is not slow and does not fail; something
+between the runner and the edge loses the request or its response, intermittently, for POSTs.
+
+Impact: the smoke reported a defect that does not exist, repeatedly, and three fixes — a larger run
+budget, a per-request ceiling, a nearer database — each moved the symptom without touching it.
+
+Proposed handling: one retry, only when a request produced no response at all, and never when the
+run budget is already gone. That is safe here by design rather than by luck: creates carry an
+idempotency key and replay to the same resource, and every other command is guarded on
+`expectedVersion`, so a duplicate delivery is refused rather than applied twice (B11). The retry is
+logged as `[retry] <action>` so a run that needed one says so.
+
+Resolution: 2026-09-15 — applied; `pnpm check` and `pnpm verify:worker` (12/12) pass. The transport
+behaviour itself is **not explained**, and the retry does not explain it. What is established is
+where it is not: not the application, not the database's region, not the seeding order. If it turns
+out to matter for real users — a browser POST losing its response would be visible as a hung save —
+this deserves a proper investigation with Cloudflare rather than a tolerant test client.
