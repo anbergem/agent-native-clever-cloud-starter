@@ -2118,3 +2118,40 @@ about a shared signal.
 Resolution: 2026-09-14 — applied. Whether 300s is enough, or whether that check is genuinely stuck
 rather than slow, is not yet known: if it exhausts the larger budget at the same check, the problem
 is a hang and not a timeout, and that is worth knowing either way.
+
+## 2026-09-15 B20 — the smoke had no per-request ceiling, so one call ate the whole run
+
+Expected (plan reference): B20's smoke gives each check a bounded time and reports which check
+failed, so a staging failure names its cause.
+
+Observed: raising the run budget from 120s to 300s changed nothing — the staging smoke still died
+in `reversible write, conflict, undo and isolation`, and the improved message showed that check
+consuming **292872ms of the 300000ms budget**. A direct probe of the deployed Worker then ran the
+identical sequence from a developer machine: login 865ms, `list-customers` 260ms, `create-job`
+468ms, `complete-job` 388ms, the deliberate conflict 409 in 259ms, `undo-operation` 480ms,
+`list-recent-activity` 375ms. The deployed application is healthy, D1 writes included.
+
+Cause, in `scripts/lib/http-client.mjs`:
+
+```js
+signal: init.signal ?? AbortSignal.timeout(this.timeoutMs),
+```
+
+The client's per-request timeout applied **only when the caller passed no signal**. Every smoke
+call passes the run-wide deadline, so `timeoutMs` was dead code for the entire suite and a single
+stalled request could absorb the whole budget with nothing to stop it. That is also why the cause
+stayed anonymous: no request-level timeout ever fired to name the call.
+
+Impact: three rounds of wrong hypotheses — stale secrets, a missing D1 permission, account-owned
+tokens, hanging D1 writes — and a serious proposal to abandon Cloudflare for Turso, all built on a
+symptom manufactured by our own test client. The application was never implicated by the evidence;
+the instrumentation simply could not say what was slow.
+
+Proposed handling: combine both ceilings with `AbortSignal.any([init.signal,
+AbortSignal.timeout(this.timeoutMs)])`, so a run budget and a per-request limit both apply; and
+wrap request failures with the method and path, because the check wrapper only knows the check's
+name and "The operation was aborted due to timeout" identifies nothing.
+
+Resolution: 2026-09-15 — applied. `pnpm check` and `pnpm verify:worker` (12/12) pass. What actually
+stalls between a GitHub runner and this Worker is still unknown, and deliberately so: the next
+staging run will name the request instead of the check, which is the evidence that was missing.
