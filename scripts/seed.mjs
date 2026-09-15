@@ -23,13 +23,15 @@
 // verified with a login instead of a second registration. A second run changes nothing.
 
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
 import { createClient } from "@libsql/client";
+
+import { parseJsonc } from "./lib/jsonc.mjs";
 
 const repoRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -128,8 +130,40 @@ if (target === "d1-remote") {
   fail(`--env applies to --target d1-remote only (got --target ${target})`);
 }
 
+/**
+ * Where the Worker's binding actually points, not where the name pattern says
+ * it should.
+ *
+ * Deriving `${BASE_NAME}-${env}` duplicates a fact that lives in
+ * `wrangler.jsonc`, and the two drifted the moment a staging database had to be
+ * recreated: the seed reported "applied the scenario to acme-ops-staging" while
+ * the deployed Worker read `acme-ops-staging-2`, so every QA identity came back
+ * with no organization and the smoke failed on authorization rather than on
+ * anything it meant to test (DISCREPANCIES.md, 2026-09-15). Read the binding.
+ */
+function remoteDatabaseName(environment) {
+  const configPath = path.join(repoRoot, "wrangler.jsonc");
+  let config;
+  try {
+    config = parseJsonc(readFileSync(configPath, "utf8"));
+  } catch (error) {
+    fail(`could not read wrangler.jsonc: ${error}`);
+  }
+  const bindings = config?.env?.[environment]?.d1_databases;
+  const name = Array.isArray(bindings) ? bindings[0]?.database_name : undefined;
+  if (typeof name !== "string" || name === "") {
+    fail(
+      `wrangler.jsonc has no env.${environment}.d1_databases[0].database_name; ` +
+        "the seed refuses to guess which database the Worker is bound to",
+    );
+  }
+  return name;
+}
+
 const databaseName =
-  target === "d1-remote" ? `${BASE_NAME}-${wranglerEnv}` : `${BASE_NAME}-local`;
+  target === "d1-remote"
+    ? remoteDatabaseName(wranglerEnv)
+    : `${BASE_NAME}-local`;
 
 // ---------------------------------------------------------------------------
 // The scenario, from the TypeScript fixture

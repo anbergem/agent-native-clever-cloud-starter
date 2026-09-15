@@ -2326,3 +2326,39 @@ choices and empty by default (D1 chooses, near you). `.bootstrap.env.example` ex
 GitHub-hosted runners are in the United States, so a European maintainer usually wants `enam`.
 An existing database cannot be moved — neither jurisdiction nor location is changeable after
 creation — so an existing deployment has to create a new one and repoint `wrangler.jsonc`.
+
+## 2026-09-15 B12 — the seed derived the database name and silently seeded the wrong one
+
+Expected (plan reference): B12's QA reset seeds the deterministic scenario into the environment the
+deployed Worker reads.
+
+Observed: with staging repointed at a new database, the deploy's reset reported
+
+```
+seed: reset: removed the scenario rows from acme-ops-staging
+seed: applied the scenario to acme-ops-staging
+```
+
+while `wrangler.jsonc`'s `env.staging.d1_databases[0]` had become `acme-ops-staging-2`. The seed
+wrote the scenario into a database the Worker no longer reads, and reported success. The smoke then
+failed on `QA login and organization` with `"orgId": null, "orgs": []`, and every action after it
+with `No active organization` — an authorization failure that looks nothing like the misdirected
+write behind it.
+
+Cause: `scripts/seed.mjs` computed the target as `` `${BASE_NAME}-${wranglerEnv}` ``, duplicating a
+fact that already lives in `wrangler.jsonc`. The two agreed until the day a database had to be
+recreated — and the recreation is exactly the situation the copy cannot survive, because neither
+jurisdiction nor location can be changed in place.
+
+Impact: a deploy that migrated, deployed and reset successfully, then failed the smoke for a reason
+unrelated to everything it reported doing. The wasted signal is the point: the run said "applied the
+scenario" and it had, to the wrong database.
+
+Proposed handling: read `env.<env>.d1_databases[0].database_name` from `wrangler.jsonc` for
+`--target d1-remote`, and refuse rather than guess when it is absent. The local targets keep their
+derived names: nothing else defines them, and there is no second source to drift from.
+
+Resolution: 2026-09-15 — applied; `pnpm check` passes. The template's own `package.json` still
+spells the staging database name in `db:migrate:staging`, which is a second copy of the same fact —
+left alone here because `wrangler d1 migrations apply` takes the name as an argument, but worth
+revisiting if it drifts too.
