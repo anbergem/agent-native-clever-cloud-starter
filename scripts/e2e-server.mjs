@@ -189,38 +189,49 @@ try {
     "--config",
     configFile,
   ]);
-  worker = spawn(
-    "pnpm",
-    [
-      "exec",
-      "wrangler",
-      "dev",
-      "--local",
-      "--ip",
-      "127.0.0.1",
-      "--port",
-      `${port}`,
-      "--persist-to",
-      persistTo,
-      "--config",
-      configFile,
-    ],
-    {
-      cwd: repoRoot,
-      // Piped, never inherited. Playwright's web-server teardown waits for this
-      // process's own stdout and stderr to close; a Wrangler descendant holding
-      // the inherited handles keeps them open and hangs the whole run even after
-      // Playwright has killed this process. Piping gives Wrangler handles that
-      // die with it, and its output is forwarded below so failures stay visible.
-      stdio: ["ignore", "pipe", "pipe"],
-      detached: process.platform !== "win32",
-      env: safeEnvironment(),
-    },
-  );
-  worker.stdout.pipe(process.stdout);
-  worker.stderr.pipe(process.stderr);
-  await waitFor("/_agent-native/ping", worker);
-  await waitFor("/_agent-native/health", worker);
+  /**
+   * Start Wrangler and wait until it answers. Extracted so the supervisor
+   * below can call it again: `wrangler dev` sometimes exits on its own
+   * mid-run (observed as `code 1` after workerd logs a broken-pipe write on a
+   * request the browser aborted), and a run that dies for that reason has
+   * nothing wrong with it that a restart does not fix.
+   */
+  async function startWorker() {
+    worker = spawn(
+      "pnpm",
+      [
+        "exec",
+        "wrangler",
+        "dev",
+        "--local",
+        "--ip",
+        "127.0.0.1",
+        "--port",
+        `${port}`,
+        "--persist-to",
+        persistTo,
+        "--config",
+        configFile,
+      ],
+      {
+        cwd: repoRoot,
+        // Piped, never inherited. Playwright's web-server teardown waits for this
+        // process's own stdout and stderr to close; a Wrangler descendant holding
+        // the inherited handles keeps them open and hangs the whole run even after
+        // Playwright has killed this process. Piping gives Wrangler handles that
+        // die with it, and its output is forwarded below so failures stay visible.
+        stdio: ["ignore", "pipe", "pipe"],
+        detached: process.platform !== "win32",
+        env: safeEnvironment(),
+      },
+    );
+    worker.stdout.pipe(process.stdout);
+    worker.stderr.pipe(process.stderr);
+    await waitFor("/_agent-native/ping", worker);
+    await waitFor("/_agent-native/health", worker);
+  }
+
+  await startWorker();
 
   const directory = mkdtempSync(path.join(tmpdir(), "example-jobs-e2e-seed-"));
   try {
@@ -250,19 +261,32 @@ try {
   // has touched the database).
   mkdirSync(path.dirname(stateFile), { recursive: true });
   writeFileSync(stateFile, JSON.stringify({ configFile, persistTo }));
-  await new Promise((resolve, reject) => {
-    // Wrangler is expected to outlive the tests and to end by our own signal.
-    // An exit we did not ask for is a server failure and has to be reported,
-    // or the suite fails with connection errors and no explanation.
-    worker.once("exit", (code, signal) => {
-      if (stopped) resolve();
-      else
-        reject(
-          new Error(`wrangler dev exited on its own (code ${code}, ${signal})`),
-        );
+  // Wrangler is expected to outlive the tests and to end by our own signal.
+  // When it ends by itself the run used to die in the worst possible way: this
+  // process exited, `finally` deleted the state file, and every remaining test
+  // failed inside `resetScenario` with ENOENT on a path — saying nothing about
+  // a dead server (DISCREPANCIES.md, 2026-09-15). The database lives in
+  // `persistTo` and survives, so a restart resumes against the same data and
+  // Playwright's CI retry gives the tests that were in flight another go.
+  const MAX_RESTARTS = 3;
+  let restarts = 0;
+  for (;;) {
+    const exit = await new Promise((resolve, reject) => {
+      worker.once("exit", (code, signal) => resolve({ code, signal }));
+      worker.once("error", reject);
     });
-    worker.once("error", reject);
-  });
+    if (stopped) break;
+    restarts += 1;
+    if (restarts > MAX_RESTARTS) {
+      throw new Error(
+        `wrangler dev exited on its own ${restarts} times (last: code ${exit.code}, ${exit.signal}); giving up`,
+      );
+    }
+    console.error(
+      `e2e-server: wrangler dev exited on its own (code ${exit.code}, ${exit.signal}) — restarting ${restarts}/${MAX_RESTARTS}, database in ${persistTo} is unaffected`,
+    );
+    await startWorker();
+  }
 } catch (error) {
   console.error(
     `e2e-server: ${error instanceof Error ? error.message : error}`,
