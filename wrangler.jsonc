@@ -20,6 +20,22 @@
     "APP_URL": "http://127.0.0.1:8787",
     "AUTO_CREATE_DEFAULT_ORG": "0",
     "AGENT_NATIVE_DISABLE_AUTO_DEV_ACCOUNT": "1",
+    // The Cloudflare build replaces `@anthropic-ai/sdk` with
+    // `export default class Anthropic {}` (`CLOUDFLARE_WORKER_STUB_MODULES` in
+    // core's `deploy/build.js`), so the framework's default `anthropic` engine
+    // constructs an empty object and dies on `client.messages.stream` with
+    // "Cannot read properties of undefined (reading 'stream')" — agent chat is
+    // dead on every Worker, local `dev:worker` included. `ai-sdk:anthropic`
+    // reaches the same API over `fetch` through `@ai-sdk/anthropic`, a declared
+    // dependency that is bundled intact. Same key, same models.
+    // See docs/plan/upstream-issues/anthropic-sdk-stubbed-on-workers.md.
+    "AGENT_ENGINE": "ai-sdk:anthropic",
+    // `require.resolve` cannot see inside a Worker bundle, so the engine's own
+    // "is this package installed?" gate rejects `ai-sdk:*` at runtime with
+    // "requires optional packages that are not installed". The framework injects
+    // this marker only in its Netlify/Nitro deploy build, so the Cloudflare path
+    // has to supply it: a JSON array naming the packages that really are bundled.
+    "AGENT_NATIVE_BUILD_ENGINE_PACKAGES": "[\"ai\",\"@ai-sdk/anthropic\"]",
     "AUTH_REQUIRE_EMAIL_VERIFICATION": "0",
     "SEED_ENABLED": "1",
   },
@@ -41,6 +57,10 @@
         "APP_URL": "https://REPLACE_ME_STAGING_HOST",
         "AUTO_CREATE_DEFAULT_ORG": "0",
         "AGENT_NATIVE_DISABLE_AUTO_DEV_ACCOUNT": "1",
+        // The native `anthropic` engine cannot load on a Worker (see the
+        // top-level `vars`); this one is bundled and reaches the API over fetch.
+        "AGENT_ENGINE": "ai-sdk:anthropic",
+        "AGENT_NATIVE_BUILD_ENGINE_PACKAGES": "[\"ai\",\"@ai-sdk/anthropic\"]",
         "AUTH_REQUIRE_EMAIL_VERIFICATION": "0",
         "SEED_ENABLED": "1",
         "AGENT_NATIVE_AUDIT_RETENTION_DAYS": "365",
@@ -62,6 +82,10 @@
         "APP_URL": "https://REPLACE_ME_PRODUCTION_HOST",
         "AUTO_CREATE_DEFAULT_ORG": "0",
         "AGENT_NATIVE_DISABLE_AUTO_DEV_ACCOUNT": "1",
+        // The native `anthropic` engine cannot load on a Worker (see the
+        // top-level `vars`); this one is bundled and reaches the API over fetch.
+        "AGENT_ENGINE": "ai-sdk:anthropic",
+        "AGENT_NATIVE_BUILD_ENGINE_PACKAGES": "[\"ai\",\"@ai-sdk/anthropic\"]",
         "AUTH_REQUIRE_EMAIL_VERIFICATION": "1",
         // Explicitly disabled rather than omitted: "0" and absent mean the same
         // thing to `env-check`, but only the explicit form survives the

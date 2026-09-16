@@ -2538,3 +2538,70 @@ Resolution: the local hunt stops here. Continuing to iterate against a deployed 
 cycle at a time, has passed the point where it produces knowledge. The next move is an upstream
 report carrying this evidence — the tail output, the timings, the five refutations — and a decision
 about whether a staging smoke should gate deploys while it runs across a path that loses replies.
+
+---
+
+## 2026-09-16 — Agent chat has never worked on a Worker, for two separate reasons
+
+Symptom, on deployed staging and under local `wrangler dev` alike: the agent chat stream opens
+and carries one error, `Cannot read properties of undefined (reading 'stream')`. The entry above
+guessed this was the same lost-reply mechanism. It was not; it is two framework bugs in series,
+and the evidence is in the built bundle rather than on the wire.
+
+1. `CLOUDFLARE_WORKER_STUB_MODULES` (core `dist/deploy/build.js`) maps `@anthropic-ai/sdk` to
+   `export default class Anthropic {}`. `anthropic-engine.ts` does
+   `(await import("@anthropic-ai/sdk")).default`, so `new Anthropic({ apiKey })` returns `{}`
+   and `client.messages.stream(...)` throws exactly that message. The bundle confirms it:
+   `this.messages = new API.Messages(this)` is absent, the `n.messages.stream(...)` call site
+   is not. Nothing warns — `/_agent-native/agent-engine/status` cheerfully reports
+   `{"configured":true,"engine":"anthropic","model":"claude-sonnet-5"}`.
+2. Selecting `ai-sdk:anthropic` instead is refused at runtime: `canResolvePackage()` gates it on
+   `require.resolve`, which cannot see inside a Worker bundle, and neither fallback covers
+   workerd — `AGENT_NATIVE_BUILD_ENGINE_PACKAGES` is injected only by the Netlify/Nitro deploy
+   build, and `isBundledServerlessRuntime()` matches Vercel/Netlify markers and `/var/task/`.
+
+So Cloudflare had no working Anthropic engine at all: the engine that is chosen cannot load, and
+the engine that can load is refused. Fixed by setting both `AGENT_ENGINE=ai-sdk:anthropic` and
+`AGENT_NATIVE_BUILD_ENGINE_PACKAGES=["ai","@ai-sdk/anthropic"]` in every `wrangler.jsonc` vars
+block, and in `.env.example` for the Node dev server and the evals. `tests/guards/agent-engine.test.mjs`
+holds it in place and fails when the framework stops stubbing the SDK, so the workaround is
+revisited at the next upgrade rather than outliving its cause (D03). Drafted upstream as
+`upstream-issues/anthropic-sdk-stubbed-on-workers.md`.
+
+Verified, not assumed: `pnpm smoke` against `wrangler dev` now reports `[ok] agent chat SSE`
+against the real API. It is the first green agent chat on a Worker in this repository.
+
+## 2026-09-16 — The lost POST reply reproduces locally, and depends on database state
+
+Chasing the above produced the thing five deploy cycles could not: a local reproduction of the
+lost-reply failure, on `127.0.0.1`, with no network, no Cloudflare edge and no GitHub runner
+anywhere in the path.
+
+```
+{"level":"info","event":"action","action":"create-job","outcome":"success","durationMs":2}
+   … and no `[wrangler:info] POST /_agent-native/actions/create-job` completion line at all
+```
+
+Twenty consecutive `create-job` POSTs: every one executed server-side in 2–6ms, not one reply
+reached `curl`. In the same window `GET` actions answered in 18ms, `POST /_agent-native/auth/login`
+in 63ms and `POST /mcp` in 14ms. A `create-job` carrying `{}` — refused before any write — hung
+too, so this is not the write path.
+
+Two theories raised and refuted immediately, both mine:
+
+- **Duplicate dev servers.** There were indeed two `wrangler dev` processes racing on 8787,
+  because `pkill -f "wrangler dev"` matches nothing: the command line reads `wrangler.js dev`.
+  Killed properly, verified a single listener, and the hang reproduced unchanged.
+- **The new `AGENT_NATIVE_BUILD_ENGINE_PACKAGES` var.** It was the only change between the last
+  green run and the first failing one. Removed it, restarted: still hung.
+
+What actually separates them is **database state**. `pnpm db:reset` + re-migrate + re-seed, same
+bundle, same vars, same everything else: twelve of twelve green, including the two write suites
+that had just failed. The preceding failures ran against a database carrying four earlier smoke
+runs and twenty-five probe jobs.
+
+This refutes the previous entry's conclusion, which located the fault "between the runner and the
+edge". It is in the Worker, it is reachable from a laptop, and it is a function of how much is in
+the database — not of geography, not of the network, and not of Cloudflare's wire. The threshold,
+and which table drives it, are not yet established; that is the next measurement, and it is now a
+local one that costs seconds instead of a deploy.
