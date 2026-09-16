@@ -10,8 +10,8 @@ const root = path.resolve(
   "..",
 );
 
-// `patches/@agent-native__core@<version>.patch` carries two changes: it detaches the
-// audit write from the request path, which is the measured cause of wedged isolates,
+// `patches/@agent-native__core@<version>.patch` carries two changes: it bounds the
+// audit write's hold on the request, which is the measured cause of wedged isolates,
 // and it bounds every statement, which covers the same failure in the framework's
 // other runtime table bootstraps (DISCREPANCIES.md, 2026-09-16). Like the
 // bundle patches in `scripts/lib/worker-patches.mjs`, it is pinned to one version
@@ -40,7 +40,7 @@ test("the patch is pinned to the installed core version", () => {
   );
 });
 
-test("the audit write no longer blocks the request", () => {
+test("the audit write can no longer block the request forever", () => {
   const action = readFileSync(
     path.join(
       root,
@@ -52,17 +52,17 @@ test("the audit write no longer blocks the request", () => {
     ),
     "utf8",
   );
-  // The blocking `await` is what wedged isolates: `ensureAuditTables()` can stop
-  // settling, and a `try/catch` around it catches rejections, not silence. The
-  // recorder is still awaited — inside a detached task, which is the point.
+  // An unbounded `await` here is what wedged isolates: `ensureAuditTables()` can
+  // stop settling, and a `try/catch` around it catches rejections, not silence.
+  // The row is still waited for — with a ceiling, which is the point. Detaching
+  // it entirely also works and was tried; it drops the ordering two e2e tests
+  // depend on, and they failed, correctly.
   assert.ok(
-    action.includes("schedule the audit write, do not wait for it"),
-    "the installed @agent-native/core still awaits its audit write — run `pnpm install`",
+    action.includes("wait for the audit write, but only briefly"),
+    "the installed @agent-native/core still awaits its audit write without a ceiling — run `pnpm install`",
   );
-  assert.match(
-    action,
-    /void \(async \(\) => \{[\s\S]{0,400}?recordActionAudit\(threw/,
-  );
+  assert.match(action, /AGENT_NATIVE_AUDIT_WAIT_MS/);
+  assert.match(action, /Promise\.race\(\[\s*auditTask,/);
 });
 
 test("statements are still bounded", () => {

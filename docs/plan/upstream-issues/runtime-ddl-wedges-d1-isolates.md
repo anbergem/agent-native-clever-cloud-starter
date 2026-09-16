@@ -108,10 +108,14 @@ Three things would each be sufficient, and they compose:
 
 `patches/@agent-native__core@0.176.5.patch` (pnpm patch) does two things.
 
-The fix: `wrapRunWithAudit` schedules the audit write instead of awaiting it. Its own
-docstring already calls auditing best-effort and promises it "can never change an
-action's behavior" — waiting on a network write before answering is what broke that.
-Verified locally at twelve of twelve green with twelve audit rows still written.
+The fix: `wrapRunWithAudit` still awaits the audit write, but races it against
+`AGENT_NATIVE_AUDIT_WAIT_MS` (default 1000ms, 0 detaches entirely). On a healthy path
+the recorder finishes in single-digit milliseconds and nothing observable changes; on a
+stalled bootstrap the reply is late by at most a second instead of never arriving.
+
+Detaching it entirely was tried first and is too much: two e2e tests assert the audit
+row exists the moment the action returns, and they failed. The guarantee is worth
+keeping — it is what the wrapper is for. Only its unboundedness is the bug.
 
 The bound: `AGENT_NATIVE_DB_STATEMENT_TIMEOUT_MS` (default 5000ms, 0 disables),
 installed on the client `getDbExec()` actually hands out. This covers the same

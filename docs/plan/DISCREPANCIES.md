@@ -2743,3 +2743,28 @@ not the only runtime bootstrap that does this — `chat-threads/store.js` and
 `agent/run-store.js` repeat the pattern, and agent chat hangs on staging for what looks
 like the same reason. That half is a bound on a failure mode, not a proven fix, and this
 entry says so rather than implying the deploy validated it.
+
+---
+
+## 2026-09-16 — Detaching the audit write was too much; CI said so
+
+The detached version answered fast and broke the guarantee `wrapRunWithAudit` exists to
+provide. Two e2e tests assert the audit row is there the moment the action returns —
+`complete-job` ("the change is audited as a frontend call") and `parity` ("the UI and a
+direct HTTP call run the same action and differ only in caller") — and both failed.
+Correctly: the row was being written, just not yet.
+
+So the await stays and gains a ceiling instead. `Promise.race` against
+`AGENT_NATIVE_AUDIT_WAIT_MS` (default 1000ms, 0 detaches entirely). On a healthy path the
+recorder finishes in single-digit milliseconds and nothing observable changes — ordering
+intact, tests green. On a stalled bootstrap the reply is late by at most a second rather
+than never arriving.
+
+That is the whole fix: not "don't audit", not "audit in the background", but "the reply
+is not hostage to the audit". Verified locally — twelve of twelve smoke, **seventeen of
+seventeen e2e including the two that caught this**, and twelve audit rows written.
+
+Worth keeping in view: this is the third shape of the same patch in one afternoon. The
+first guarded nothing, the second wedged the client, the third answered fast and lost an
+ordering guarantee. Each was caught by something that runs — a deploy, a local smoke, CI —
+and none by reading the code and feeling confident.

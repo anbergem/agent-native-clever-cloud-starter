@@ -1,39 +1,35 @@
 diff --git a/dist/action.js b/dist/action.js
-index 2a298f43b13c9355d7fa6cffedc79018ceacc9e4..acb580dc52fc3dc62829fbc76f5f904bb082d3fd 100644
+index 2a298f43b13c9355d7fa6cffedc79018ceacc9e4..121c47f201820bbcefa518afced78713dd0c42f0 100644
 --- a/dist/action.js
 +++ b/dist/action.js
-@@ -365,15 +365,40 @@ function wrapRunWithAudit(run, auditConfig) {
+@@ -365,14 +365,53 @@ function wrapRunWithAudit(run, auditConfig) {
              error = err;
              threw = true;
          }
 -        try {
-+        // PATCH: schedule the audit write, do not wait for it.
++        // PATCH: wait for the audit write, but only briefly.
 +        //
-+        // On Cloudflare D1 this await is where mutating actions go to die. The
-+        // recorder's first call per isolate runs `ensureAuditTables()`, which issues a
-+        // CREATE TABLE, ten ALTER TABLE ADD COLUMN statements that are *expected* to
-+        // throw on every boot after the first, and six CREATE INDEX — seventeen
-+        // sequential round trips memoized as one shared `_initPromise` that only
-+        // resets in `.catch`. Against remote D1 that sequence intermittently never
-+        // settles, and from then on every later request on the isolate awaits the same
++        // On Cloudflare D1 an unbounded await here is where mutating actions go to
++        // die. The recorder's first call per isolate runs `ensureAuditTables()`, which
++        // issues a CREATE TABLE, ten ALTER TABLE ADD COLUMN statements that are
++        // *expected* to throw on every boot after the first, and six CREATE INDEX —
++        // seventeen sequential round trips memoized as one shared `_initPromise` that
++        // only resets in `.catch`. Against remote D1 that sequence intermittently never
++        // settles, and every later request on the isolate then awaits the same
 +        // never-settling promise. Measured on deployed staging: authenticated commands
-+        // answered 4 times out of 30 and degraded to 0 of 15, while reads answered
-+        // 100% throughout — exactly the line `resolveAuditAttach()` draws between
-+        // audited and unaudited actions. Setting AGENT_NATIVE_AUDIT_ENABLED=false,
-+        // changing nothing else, took the same three calls to 10/10 each.
++        // answered 4 times out of 30 and degraded to 0 of 15, while reads answered 100%
++        // throughout — exactly the line `resolveAuditAttach()` draws. Setting
++        // AGENT_NATIVE_AUDIT_ENABLED=false, changing nothing else, took the same three
++        // calls to 10/10 each. The `try/catch` cannot help: it catches rejections, and
++        // this is silence.
 +        //
-+        // The `try/catch` above cannot help: it catches a rejection, and this is a
-+        // promise that never settles. Bounding each statement with a deadline does not
-+        // help either — tried, and a rejection inside this path hangs the response just
-+        // as thoroughly as a stall (`outcome success` logged, no reply sent).
-+        //
-+        // So the await goes. The comment on this function already calls auditing
-+        // best-effort and promises it "can never change an action's behavior"; waiting
-+        // for a network write before answering is what broke that promise. Detaching it
-+        // keeps every audit row that completes and costs the ones cut short when an
-+        // isolate is torn down — a trade the caller's own docs already sanction, and a
-+        // far smaller loss than the action never answering.
-+        void (async () => {
++        // Detaching it entirely answers fast but drops the ordering guarantee that
++        // `wrapRunWithAudit` is *for*: two e2e tests assert the audit row exists the
++        // moment the action returns, and they failed, correctly. So the await stays and
++        // gains a ceiling. The row lands before the reply on every healthy path — it
++        // costs single-digit milliseconds — and a stalled bootstrap delays the reply by
++        // at most AGENT_NATIVE_AUDIT_WAIT_MS instead of forever.
++        const auditTask = (async () => {
              const { recordActionAudit } = await import("./audit/record.js");
              await recordActionAudit(threw
                  ? { config: auditConfig, args, ctx, status: "error", error }
@@ -42,11 +38,27 @@ index 2a298f43b13c9355d7fa6cffedc79018ceacc9e4..acb580dc52fc3dc62829fbc76f5f904b
 -        catch {
 +        })().catch(() => {
              // Recorder failed to load/run — never affect the action.
--        }
 +        });
++        const auditWaitRaw = Number(process.env.AGENT_NATIVE_AUDIT_WAIT_MS);
++        const auditWaitMs = Number.isFinite(auditWaitRaw) && auditWaitRaw >= 0
++            ? auditWaitRaw
++            : 1000;
++        if (auditWaitMs === 0) {
++            // Opt out of waiting altogether.
++        }
++        else {
++            let graceTimer;
++            await Promise.race([
++                auditTask,
++                new Promise((resolve) => {
++                    graceTimer = setTimeout(resolve, auditWaitMs);
++                }),
++            ]);
++            if (graceTimer !== undefined)
++                clearTimeout(graceTimer);
+         }
          if (threw)
              throw error;
-         return result;
 diff --git a/dist/db/client.js b/dist/db/client.js
 index 2d9968e96e278220b7a503da29dcdef7584f66ab..a01ee285ac41726a316b7c0d7a170dfbfd9f195c 100644
 --- a/dist/db/client.js
