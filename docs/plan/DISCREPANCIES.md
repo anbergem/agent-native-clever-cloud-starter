@@ -2652,3 +2652,50 @@ Two theories from earlier today also died, both mine:
 What stands: the fault is inside the Worker's action-invocation path, it is reachable from
 anywhere, and it is independent of what the action does. That is a narrow enough statement to
 carry to Cloudflare and to Builder.io, which is the next step rather than a seventh theory.
+
+---
+
+## 2026-09-16 — Found it: runtime DDL wedges an isolate, and the wedge is sticky
+
+The audit log was the difference. `AGENT_NATIVE_AUDIT_ENABLED=false` on staging,
+nothing else changed:
+
+```
+                      before   after
+POST complete-job {}   1/10    10/10
+POST archive-job  {}   0/10    10/10
+POST create-job   {}   3/10    10/10
+```
+
+and the deployment's write suite passed for the first time on staging. Successful
+commands then answer in a steady 0.21-0.29s, so the ordinary query path was never the
+problem.
+
+The mechanism, read out of `core/dist/audit/store.js` rather than guessed:
+`ensureAuditTables()` bootstraps the table on first use with one
+`CREATE TABLE IF NOT EXISTS`, ten `ALTER TABLE … ADD COLUMN` statements that are
+*expected* to throw on every boot after the first, and six `CREATE INDEX IF NOT
+EXISTS` — seventeen sequential round trips before an isolate's first mutating action
+can answer. Free against a local file; against remote D1 one of them intermittently
+never returns. And because the sequence is memoized as a single `_initPromise` that
+only resets `.catch`, a promise that never settles is awaited forever by every later
+request on that isolate. That is why it looked like one failure in three early and
+15 out of 15 an hour later: not randomness, one poisoned isolate.
+
+It also explains `agent-chat-d1-hang.md` — "the 8th D1 query never returns" is the
+8th of those seventeen — and why reads never failed: `resolveAuditAttach()` audits
+every mutating action and no read-only one, which is precisely the boundary measured.
+
+Fixed with `patches/@agent-native__core@0.176.5.patch` (pnpm patch, 76 lines), which
+bounds `execAnnotated` — the one funnel every statement passes through — with
+`AGENT_NATIVE_DB_STATEMENT_TIMEOUT_MS` (default 5000ms, 0 disables). A bounded
+rejection is all the call sites need: each `_initPromise` already resets on rejection,
+so it self-heals, and `recordActionAudit` swallows it exactly as its own "auditing
+must never break the audited action" comment intends. One seam rather than the twenty
+stores that repeat the pattern. `tests/guards/core-patch.test.mjs` fails when the
+version moves or the seam changes shape, so the patch is re-examined at every upgrade
+rather than carried silently (D03). Drafted upstream as
+`upstream-issues/runtime-ddl-wedges-d1-isolates.md`.
+
+Verified locally before deploying: twelve of twelve green with the patch in the
+bundle, agent chat included.

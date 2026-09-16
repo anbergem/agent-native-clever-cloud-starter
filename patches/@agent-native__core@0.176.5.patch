@@ -1,0 +1,76 @@
+diff --git a/dist/db/client.js b/dist/db/client.js
+index 2d9968e96e278220b7a503da29dcdef7584f66ab..ef05a4eb8d4fa456cb58ec6e3b650cb5d51fa2fb 100644
+--- a/dist/db/client.js
++++ b/dist/db/client.js
+@@ -1848,6 +1848,56 @@ export function annotateMissingTable(err, sql) {
+             (statement ? `\n  Statement: ${statement.slice(0, 200)}` : "");
+     return err;
+ }
++
++// ── PATCH: bound every statement so a stalled one cannot wedge an isolate ──────
++//
++// The framework creates its own tables at runtime on first use. For the audit log
++// that is `CREATE TABLE IF NOT EXISTS`, then ten `ALTER TABLE ... ADD COLUMN`
++// statements that are expected to throw on every boot after the first, then six
++// `CREATE INDEX IF NOT EXISTS` — seventeen sequential round trips before the first
++// mutating action of an isolate can answer. Against local SQLite that is free.
++// Against remote D1 a statement in that sequence intermittently never returns, and
++// because each bootstrap memoizes its work as one shared `_initPromise`, every
++// later request on that isolate awaits the same never-settling promise. Measured on
++// deployed staging: authenticated commands answered 4 times out of 30, degrading to
++// 0 out of 15 on a poisoned isolate, while reads and unauthenticated POSTs answered
++// 100% throughout. Disabling the audit log alone took it to 30 of 30.
++//
++// A rejection is all those call sites need: each `_initPromise` already resets
++// itself in a `.catch`, so a bounded failure self-heals on the next request, and
++// `recordActionAudit` swallows it entirely — "auditing must never break the audited
++// action", as its own comment puts it. Only a hang defeats them.
++//
++// This is deliberately at the single funnel every statement passes through rather
++// than in ~20 store modules that each repeat the pattern. 0 disables the bound.
++// See docs/plan/upstream-issues/runtime-ddl-wedges-d1-isolates.md.
++const DEFAULT_STATEMENT_TIMEOUT_MS = 5000;
++function statementTimeoutMs() {
++    const raw = process.env.AGENT_NATIVE_DB_STATEMENT_TIMEOUT_MS;
++    if (raw === undefined || raw === "")
++        return DEFAULT_STATEMENT_TIMEOUT_MS;
++    const parsed = Number(raw);
++    if (!Number.isFinite(parsed) || parsed < 0)
++        return DEFAULT_STATEMENT_TIMEOUT_MS;
++    return parsed;
++}
++function withStatementDeadline(pending, statement) {
++    const ms = statementTimeoutMs();
++    if (ms === 0)
++        return pending;
++    let timer;
++    const deadline = new Promise((_resolve, reject) => {
++        timer = setTimeout(() => {
++            const sql = typeof statement === "string" ? statement : statement?.sql;
++            reject(new Error(`[agent-native] database statement did not answer within ${ms}ms` +
++                (sql ? `: ${String(sql).replace(/\s+/g, " ").trim().slice(0, 120)}` : "")));
++        }, ms);
++    });
++    return Promise.race([pending, deadline]).finally(() => {
++        if (timer !== undefined)
++            clearTimeout(timer);
++    });
++}
+ export function getDbExec() {
+     if (_exec)
+         return _exec;
+@@ -1861,7 +1911,7 @@ export function getDbExec() {
+     async function execAnnotated(s) {
+         assertSchemaMutationAllowed(s);
+         try {
+-            return await _exec.execute(sanitize(s));
++            return await withStatementDeadline(_exec.execute(sanitize(s)), s);
+         }
+         catch (err) {
+             throw annotateMissingTable(err, s);
+diff --git a/src/eject/catalog-wrappers.spec.ts b/src/eject/catalog-wrappers.spec.ts
+deleted file mode 100644
+index 1ec0b6552639190d5bd9cfc993a5bf095554b445..0000000000000000000000000000000000000000
+diff --git a/src/integrations/eject/slack.spec.ts b/src/integrations/eject/slack.spec.ts
+deleted file mode 100644
+index 2581340d41a2f571f62ebb069f36168e590681cd..0000000000000000000000000000000000000000
