@@ -106,11 +106,26 @@ Three things would each be sufficient, and they compose:
 
 **Workaround**
 
-`patches/@agent-native__core@0.176.5.patch` wraps the single funnel every statement
-passes through — `execAnnotated` inside `getDbExec()` — in a deadline
-(`AGENT_NATIVE_DB_STATEMENT_TIMEOUT_MS`, default 5000ms, 0 disables). One seam
-instead of twenty stores. Each `_initPromise` then rejects, resets and retries on the
-next request, and `recordActionAudit` swallows it as it always intended to.
+`patches/@agent-native__core@0.176.5.patch` (pnpm patch) does two things.
+
+The fix: `wrapRunWithAudit` schedules the audit write instead of awaiting it. Its own
+docstring already calls auditing best-effort and promises it "can never change an
+action's behavior" — waiting on a network write before answering is what broke that.
+Verified locally at twelve of twelve green with twelve audit rows still written.
+
+The bound: `AGENT_NATIVE_DB_STATEMENT_TIMEOUT_MS` (default 5000ms, 0 disables),
+installed on the client `getDbExec()` actually hands out. This covers the same
+bootstrap pattern in `chat-threads/store.js` and `agent/run-store.js`, which agent
+chat appears to hit. It is a bound on the failure mode, not a proven fix.
+
+Two dead ends worth recording, because both look reasonable:
+
+- Wrapping only the internal `execAnnotated` funnel guards nothing —
+  `getDbExec()` short-circuits to the raw `_exec` on every call after the first.
+- A deadline alone does not rescue the request. With the bound set to 1ms the action
+  logged `outcome success` and still never answered: a *rejection* inside the audited
+  path hangs the response as thoroughly as a stall. Whatever holds the response open
+  is not waiting on a promise that rejects.
 
 **Related**
 

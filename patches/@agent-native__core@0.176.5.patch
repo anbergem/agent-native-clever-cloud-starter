@@ -1,8 +1,57 @@
+diff --git a/dist/action.js b/dist/action.js
+index 2a298f43b13c9355d7fa6cffedc79018ceacc9e4..acb580dc52fc3dc62829fbc76f5f904bb082d3fd 100644
+--- a/dist/action.js
++++ b/dist/action.js
+@@ -365,15 +365,40 @@ function wrapRunWithAudit(run, auditConfig) {
+             error = err;
+             threw = true;
+         }
+-        try {
++        // PATCH: schedule the audit write, do not wait for it.
++        //
++        // On Cloudflare D1 this await is where mutating actions go to die. The
++        // recorder's first call per isolate runs `ensureAuditTables()`, which issues a
++        // CREATE TABLE, ten ALTER TABLE ADD COLUMN statements that are *expected* to
++        // throw on every boot after the first, and six CREATE INDEX — seventeen
++        // sequential round trips memoized as one shared `_initPromise` that only
++        // resets in `.catch`. Against remote D1 that sequence intermittently never
++        // settles, and from then on every later request on the isolate awaits the same
++        // never-settling promise. Measured on deployed staging: authenticated commands
++        // answered 4 times out of 30 and degraded to 0 of 15, while reads answered
++        // 100% throughout — exactly the line `resolveAuditAttach()` draws between
++        // audited and unaudited actions. Setting AGENT_NATIVE_AUDIT_ENABLED=false,
++        // changing nothing else, took the same three calls to 10/10 each.
++        //
++        // The `try/catch` above cannot help: it catches a rejection, and this is a
++        // promise that never settles. Bounding each statement with a deadline does not
++        // help either — tried, and a rejection inside this path hangs the response just
++        // as thoroughly as a stall (`outcome success` logged, no reply sent).
++        //
++        // So the await goes. The comment on this function already calls auditing
++        // best-effort and promises it "can never change an action's behavior"; waiting
++        // for a network write before answering is what broke that promise. Detaching it
++        // keeps every audit row that completes and costs the ones cut short when an
++        // isolate is torn down — a trade the caller's own docs already sanction, and a
++        // far smaller loss than the action never answering.
++        void (async () => {
+             const { recordActionAudit } = await import("./audit/record.js");
+             await recordActionAudit(threw
+                 ? { config: auditConfig, args, ctx, status: "error", error }
+                 : { config: auditConfig, args, ctx, status: "success", result });
+-        }
+-        catch {
++        })().catch(() => {
+             // Recorder failed to load/run — never affect the action.
+-        }
++        });
+         if (threw)
+             throw error;
+         return result;
 diff --git a/dist/db/client.js b/dist/db/client.js
-index 2d9968e96e278220b7a503da29dcdef7584f66ab..ef05a4eb8d4fa456cb58ec6e3b650cb5d51fa2fb 100644
+index 2d9968e96e278220b7a503da29dcdef7584f66ab..a01ee285ac41726a316b7c0d7a170dfbfd9f195c 100644
 --- a/dist/db/client.js
 +++ b/dist/db/client.js
-@@ -1848,6 +1848,56 @@ export function annotateMissingTable(err, sql) {
+@@ -1848,9 +1848,89 @@ export function annotateMissingTable(err, sql) {
              (statement ? `\n  Statement: ${statement.slice(0, 200)}` : "");
      return err;
  }
@@ -39,6 +88,29 @@ index 2d9968e96e278220b7a503da29dcdef7584f66ab..ef05a4eb8d4fa456cb58ec6e3b650cb5
 +        return DEFAULT_STATEMENT_TIMEOUT_MS;
 +    return parsed;
 +}
++// Installed in place rather than behind a Proxy. A Proxy that rebinds every function
++// property looked tidy and wedged the client outright — create-job logged
++// `outcome success` and then never answered, on a local file database with nothing
++// to stall. Two assignments on the real object keep its identity and every other
++// behaviour untouched.
++const DEADLINE_INSTALLED = Symbol.for("agent-native.statement-deadline");
++function installStatementDeadline(client) {
++    if (!client || typeof client.execute !== "function" || client[DEADLINE_INSTALLED])
++        return client;
++    const execute = client.execute.bind(client);
++    client.execute = (s) => withStatementDeadline(execute(s), s);
++    if (typeof client.atomicBatch === "function") {
++        const atomicBatch = client.atomicBatch.bind(client);
++        client.atomicBatch = (items) => withStatementDeadline(atomicBatch(items), undefined);
++    }
++    try {
++        Object.defineProperty(client, DEADLINE_INSTALLED, { value: true });
++    }
++    catch {
++        // Frozen client: the wrappers are already installed, which is what matters.
++    }
++    return client;
++}
 +function withStatementDeadline(pending, statement) {
 +    const ms = statementTimeoutMs();
 +    if (ms === 0)
@@ -47,10 +119,17 @@ index 2d9968e96e278220b7a503da29dcdef7584f66ab..ef05a4eb8d4fa456cb58ec6e3b650cb5
 +    const deadline = new Promise((_resolve, reject) => {
 +        timer = setTimeout(() => {
 +            const sql = typeof statement === "string" ? statement : statement?.sql;
++            console.error(`[agent-native] DB DEADLINE ${ms}ms: ${String(sql ?? "(batch)").replace(/\s+/g, " ").trim().slice(0, 100)}`);
 +            reject(new Error(`[agent-native] database statement did not answer within ${ms}ms` +
 +                (sql ? `: ${String(sql).replace(/\s+/g, " ").trim().slice(0, 120)}` : "")));
 +        }, ms);
 +    });
++    // The loser of a race still settles. If `pending` rejects after the deadline has
++    // already won, nothing is listening, and an unhandled rejection takes down the
++    // request context on workerd — turning a bounded failure back into the hang this
++    // is here to prevent. Observed directly: with the bound set to 1ms, an action
++    // logged `outcome success` and then never answered.
++    pending.catch(() => { });
 +    return Promise.race([pending, deadline]).finally(() => {
 +        if (timer !== undefined)
 +            clearTimeout(timer);
@@ -58,8 +137,12 @@ index 2d9968e96e278220b7a503da29dcdef7584f66ab..ef05a4eb8d4fa456cb58ec6e3b650cb5
 +}
  export function getDbExec() {
      if (_exec)
-         return _exec;
-@@ -1861,7 +1911,7 @@ export function getDbExec() {
+-        return _exec;
++        return installStatementDeadline(_exec);
+     // Sanitize args: replace undefined with null (libsql rejects undefined)
+     function sanitize(sql) {
+         if (typeof sql === "object" && sql.args) {
+@@ -1861,7 +1941,7 @@ export function getDbExec() {
      async function execAnnotated(s) {
          assertSchemaMutationAllowed(s);
          try {

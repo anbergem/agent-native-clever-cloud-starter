@@ -2699,3 +2699,47 @@ rather than carried silently (D03). Drafted upstream as
 
 Verified locally before deploying: twelve of twelve green with the patch in the
 bundle, agent chat included.
+
+---
+
+## 2026-09-16 — The first patch was wrong, twice, and the deploy said so
+
+`de5b155` shipped a statement deadline and it changed nothing on staging. Two defects,
+both mine, both instructive enough to keep:
+
+1. **It guarded nothing.** `getDbExec()` opens with `if (_exec) return _exec;`, so every
+   call after the first hands back the raw client and bypasses the internal funnel the
+   deadline was attached to. The bound has to be installed on the object callers
+   actually receive.
+2. **The replacement wedged the client outright.** A `Proxy` that rebound every function
+   property looked tidy and produced the exact production symptom on a local file
+   database: `create-job` logged `outcome success` and never answered. Replaced with two
+   assignments on the real object, which keeps its identity and everything else.
+
+Then the experiment that ended the approach. With the bound set to 1ms, `create-job`
+still hung — and the deadline never logged a firing. A rejection inside the audited path
+hangs the response just as thoroughly as a stall does, so converting stalls into
+rejections was never going to be the fix. Three `try/catch` layers do not help: they
+catch rejections, and what the request is stuck on is silence.
+
+What the evidence actually supports is what the diagnostic already proved — the request
+must not wait for the audit write. `wrapRunWithAudit` now schedules it and answers:
+
+```js
+void (async () => {
+    const { recordActionAudit } = await import("./audit/record.js");
+    await recordActionAudit(/* … */);
+})().catch(() => {});
+```
+
+Its own docstring already calls auditing best-effort and promises it "can never change
+an action's behavior"; waiting on a network write before answering is what broke that
+promise. The cost is audit rows cut short when an isolate is torn down. Verified locally:
+twelve of twelve green **and twelve audit rows written**, so the trail survives the
+normal path.
+
+The statement bound stays in the patch, now correctly installed, because the audit log is
+not the only runtime bootstrap that does this — `chat-threads/store.js` and
+`agent/run-store.js` repeat the pattern, and agent chat hangs on staging for what looks
+like the same reason. That half is a bound on a failure mode, not a proven fix, and this
+entry says so rather than implying the deploy validated it.
