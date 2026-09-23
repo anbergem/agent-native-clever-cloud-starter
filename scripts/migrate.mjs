@@ -14,8 +14,11 @@
 import { mkdirSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
 
 import { createDbExec } from "@agent-native/core/db";
+
+import { addonDatabaseUrl } from "./lib/addon-url.mjs";
 
 const repoRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -26,10 +29,16 @@ const migrationsDir = path.join(repoRoot, "migrations");
 // Clever Cloud injects the connection string under its own name; `server/plugins/
 // 00-database-url.ts` does the same mapping for the running application. A script is not
 // the application, so it repeats the two lines rather than importing a Nitro plugin.
-const url =
-  process.env.DATABASE_URL || // guard:allow-env-credential — connection string, never logged
-  process.env.POSTGRESQL_ADDON_URI || // guard:allow-env-credential — platform-injected, never logged
-  "file:./data/app.db";
+// `--addon <name>` is how CI reaches a deployed database: the connection string is fetched
+// through the Clever Cloud CLI in-process and never touches a log or a command line.
+const { values: options } = parseArgs({
+  options: { addon: { type: "string" } },
+});
+const url = options.addon
+  ? addonDatabaseUrl(options.addon)
+  : process.env.DATABASE_URL || // guard:allow-env-credential — connection string, never logged
+    process.env.POSTGRESQL_ADDON_URI || // guard:allow-env-credential — platform-injected, never logged
+    "file:./data/app.db";
 
 const isFile = url.startsWith("file:");
 if (!isFile && !/^postgres(ql)?:\/\//.test(url)) {

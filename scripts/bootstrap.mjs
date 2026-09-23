@@ -30,6 +30,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
+import { appName } from "./lib/app-identity.mjs";
+
 const repoRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "..",
@@ -382,18 +384,15 @@ function stepPreflight(ctx) {
   const { inputs } = ctx;
   say("preflight");
 
-  /** @type {any} */
-  const manifest = JSON.parse(
-    readFileSync(path.join(repoRoot, "package.json"), "utf8"),
-  );
-  if (manifest?.name !== inputs.APP_NAME) {
+  const declared = appName();
+  if (declared !== inputs.APP_NAME) {
     refuse(
-      `package.json "name" is ${JSON.stringify(manifest?.name)} but APP_NAME is ` +
-        `"${inputs.APP_NAME}". Run \`node scripts/rename-app.mjs --name ${inputs.APP_NAME} ` +
-        `--display "<Display Name>"\` first, or correct APP_NAME.`,
+      `the application is named ${JSON.stringify(declared)} in server/plugins/config.ts but ` +
+        `APP_NAME is "${inputs.APP_NAME}". Run \`node scripts/rename-app.mjs --name ` +
+        `${inputs.APP_NAME} --display "<Display Name>"\` first, or correct APP_NAME.`,
     );
   }
-  record("preflight", `package.json name is ${inputs.APP_NAME}`, "ok");
+  record("preflight", `application name is ${inputs.APP_NAME}`, "ok");
 
   const version = clever(["version"]);
   if (version.status !== 0)
@@ -1085,7 +1084,7 @@ function stepGithubSecrets(ctx) {
       ],
       variables: [
         ["STAGING_URL", ctx.state.appUrl.staging || inputs.STAGING_URL],
-        ["CLEVER_APP_ALIAS", "staging"],
+        ["CLEVER_APP_NAME", `${inputs.APP_NAME}-staging`],
       ],
     },
     production: {
@@ -1098,7 +1097,7 @@ function stepGithubSecrets(ctx) {
           "PRODUCTION_URL",
           ctx.state.appUrl.production || inputs.PRODUCTION_URL,
         ],
-        ["CLEVER_APP_ALIAS", "production"],
+        ["CLEVER_APP_NAME", `${inputs.APP_NAME}-production`],
       ],
     },
   };

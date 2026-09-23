@@ -60,7 +60,6 @@ const EXAMPLE_FILES = [
 // local/CI setting that will silently do the wrong thing. Assembled from two halves so this
 // checker does not report its own source.
 const PLACEHOLDER = ["REPLACE", "ME"].join("_");
-const PLACEHOLDER_ENVIRONMENTS = ["staging", "production"];
 const PLACEHOLDER_SCANNED_FILES = [
   "package.json",
   ".env.example",
@@ -158,7 +157,7 @@ for (const file of placeholderFiles) {
   for (const [index, line] of contents.split("\n").entries()) {
     if (line.includes(PLACEHOLDER)) {
       findings.push(
-        `${file}:${index + 1} ${PLACEHOLDER} belongs only in wrangler.jsonc env.${PLACEHOLDER_ENVIRONMENTS.join(" and env.")}`,
+        `${file}:${index + 1} ${PLACEHOLDER} is a leftover: nothing is filled in by hand any more (T28)`,
       );
     }
   }

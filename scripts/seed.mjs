@@ -29,6 +29,8 @@ import { parseArgs } from "node:util";
 
 import { createDbExec } from "@agent-native/core/db";
 
+import { addonDatabaseUrl } from "./lib/addon-url.mjs";
+
 const repoRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "..",
@@ -62,6 +64,7 @@ try {
   parsed = parseArgs({
     options: {
       "base-url": { type: "string" },
+      addon: { type: "string" },
       reset: { type: "boolean", default: false },
       "skip-users": { type: "boolean", default: false },
     },
@@ -75,10 +78,11 @@ const skipUsers = parsed.values["skip-users"] === true;
 
 // `server/plugins/00-database-url.ts` performs this mapping for the application; a script
 // is not the application, so it repeats the two reads rather than importing a plugin.
-const databaseUrl =
-  process.env.DATABASE_URL || // guard:allow-env-credential — connection string, never logged
-  process.env.POSTGRESQL_ADDON_URI || // guard:allow-env-credential — platform-injected, never logged
-  "file:./data/app.db";
+const databaseUrl = parsed.values.addon
+  ? addonDatabaseUrl(parsed.values.addon)
+  : process.env.DATABASE_URL || // guard:allow-env-credential — connection string, never logged
+    process.env.POSTGRESQL_ADDON_URI || // guard:allow-env-credential — platform-injected, never logged
+    "file:./data/app.db";
 
 const baseUrl = (parsed.values["base-url"] ?? "http://localhost:8080").replace(
   /\/+$/,

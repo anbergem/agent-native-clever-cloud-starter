@@ -130,8 +130,8 @@ function writeStubs({ dir, log, state, world, loggedIn = true }) {
             production: ["CLEVER_TOKEN", "CLEVER_SECRET"],
           },
           repositoryVariables: {
-            staging: ["STAGING_URL", "CLEVER_APP_ALIAS"],
-            production: ["PRODUCTION_URL", "CLEVER_APP_ALIAS"],
+            staging: ["STAGING_URL", "CLEVER_APP_NAME"],
+            production: ["PRODUCTION_URL", "CLEVER_APP_NAME"],
           },
           protected: true,
           isTemplate: true,
@@ -329,14 +329,23 @@ unexpected(92);
 function stageRepository(destination, options = {}) {
   const { appName = INPUTS.APP_NAME, withProfile = true } = options;
   mkdirSync(path.join(destination, "scripts", "lib"), { recursive: true });
+  mkdirSync(path.join(destination, "server", "plugins"), { recursive: true });
+  // The application's name lives where `rename-app.mjs` puts it, which is the one place
+  // every script agrees to read it from.
   writeFileSync(
-    path.join(destination, "package.json"),
-    `${JSON.stringify({ name: appName, private: true }, null, 2)}\n`,
+    path.join(destination, "server", "plugins", "config.ts"),
+    `export default defineAppConfig({\n  app: { id: "${appName}", name: "Example Jobs" },\n});\n`,
   );
   cpSync(
     path.join(repoRoot, "scripts", "bootstrap.mjs"),
     path.join(destination, "scripts", "bootstrap.mjs"),
   );
+  for (const helper of ["app-identity.mjs", "addon-url.mjs"]) {
+    cpSync(
+      path.join(repoRoot, "scripts", "lib", helper),
+      path.join(destination, "scripts", "lib", helper),
+    );
+  }
   cpSync(
     path.join(repoRoot, ".bootstrap.env.example"),
     path.join(destination, ".bootstrap.env.example"),
@@ -603,10 +612,13 @@ test("--only runs the named steps and nothing else", () => {
   assert.match(result.stdout, /^github-secrets — skipped \(--only\)/m);
 });
 
-test("refuses an APP_NAME that does not match package.json", () => {
+test("refuses an APP_NAME that does not match the application name", () => {
   const result = bootstrap({ appName: "something-else" });
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /package\.json "name" is "something-else"/);
+  assert.match(
+    result.stderr,
+    /the application is named "something-else" in server\/plugins\/config\.ts/,
+  );
   assert.deepEqual(mutatingCalls(result.calls), []);
 });
 
