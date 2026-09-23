@@ -6,12 +6,12 @@ import test from "node:test";
 import {
   assertPortAvailable,
   terminateProcessGroup,
-} from "../../scripts/verify-worker.mjs";
+} from "../../scripts/lib/process.mjs";
 import {
   parseOptions,
   readSseEvidence,
   runSmoke,
-} from "../../scripts/worker-smoke.mjs";
+} from "../../scripts/smoke.mjs";
 
 /**
  * Waits until `process.kill(pid, 0)` reports `ESRCH`, then asserts it. Fails with the same

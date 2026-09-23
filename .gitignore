@@ -52,7 +52,6 @@ data/settings.json
 data/.sessions.json
 
 # Cloudflare / Wrangler
-.wrangler/
 
 # Database backups and restore reports (T21) — never commit customer or user rows
 backups/
@@ -79,3 +78,6 @@ learnings.md
 # Clever Cloud application ids, written by `clever create`/`clever link`.
 # Per-instantiation, like the Worker ids before it — never committed.
 .clever.json
+
+# Private state written by the e2e launcher.
+.e2e/

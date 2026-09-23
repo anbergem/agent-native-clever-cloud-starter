@@ -3,7 +3,7 @@
 //
 // Why: telemetry, auth bypasses and secrets must be impossible to acquire by accident. This
 // check runs in `pnpm check` and in CI, so a committed `AUTH_DISABLED` or a secret parked in
-// `wrangler.jsonc` `vars` fails the build instead of reaching an environment.
+// a placeholder left in a committed file fails the build instead of reaching an environment.
 //
 // Only real assignments are inspected: commented-out lines in the example files are prose.
 
@@ -11,9 +11,6 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-
-import { parseJsonc } from "./lib/jsonc.mjs";
-import { findUninheritedVars } from "./lib/wrangler-vars.mjs";
 
 const repoRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -33,14 +30,10 @@ const FORBIDDEN_KEYS = [
   "AGENT_PROD_CODE_EXECUTION",
 ];
 
-// Secrets: `wrangler secret put`, never a Worker var.
-const SECRET_KEYS = [
-  "BETTER_AUTH_SECRET",
-  "OAUTH_STATE_SECRET",
-  "GOOGLE_SIGN_IN_CLIENT_SECRET",
-  "ANTHROPIC_API_KEY",
-  "SEED_PASSWORD",
-];
+// Secret names used to be checked against `wrangler.jsonc` `vars`, to catch a secret
+// committed as a plain Worker variable. Clever Cloud has no committed variables file —
+// `clever env import` reads them from stdin — so there is nothing left here to scan, and
+// the list went with the check (T28).
 
 // The only non-empty values the committed example files may carry (T01 step 6, B13).
 const ALLOWED_EXAMPLE_VALUES = {
@@ -49,7 +42,6 @@ const ALLOWED_EXAMPLE_VALUES = {
   APP_URL: "http://localhost:8080",
   AUTO_CREATE_DEFAULT_ORG: "0",
   AGENT_NATIVE_DISABLE_AUTO_DEV_ACCOUNT: "1",
-  AGENT_ENGINE: "ai-sdk:anthropic",
   AUTH_REQUIRE_EMAIL_VERIFICATION: "0",
   SEED_ENABLED: "1",
   SEED_PASSWORD: "Example-Seed-Password-2026",
@@ -64,7 +56,7 @@ const EXAMPLE_FILES = [
 ];
 
 // B15/T02: the deploy-time placeholder belongs only in the `staging` and `production` blocks
-// of wrangler.jsonc. Anywhere else it is either a placeholder someone forgot to fill in or a
+// of a committed file. Anywhere it appears it is either a placeholder someone forgot to fill in or a
 // local/CI setting that will silently do the wrong thing. Assembled from two halves so this
 // checker does not report its own source.
 const PLACEHOLDER = ["REPLACE", "ME"].join("_");
@@ -147,85 +139,9 @@ if (frameworkConfig !== null) {
   }
 }
 
-// wrangler.jsonc does not exist until T02; skip the check until it does.
-const wranglerSource = read("wrangler.jsonc");
-if (wranglerSource !== null) {
-  /** @type {Record<string, unknown> | null} */
-  let wrangler = null;
-  try {
-    wrangler = parseJsonc(wranglerSource);
-  } catch (error) {
-    findings.push(
-      `wrangler.jsonc: not parseable as JSON after stripping comments (${error})`,
-    );
-  }
-  if (wrangler) {
-    /** @type {[string, unknown][]} */
-    const varBlocks = [["wrangler.jsonc vars", wrangler.vars]];
-    const environments =
-      /** @type {Record<string, { vars?: unknown }> | undefined} */ (
-        wrangler.env
-      );
-    for (const [name, environment] of Object.entries(environments ?? {})) {
-      varBlocks.push([`wrangler.jsonc env.${name}.vars`, environment?.vars]);
-    }
-    for (const [label, block] of varBlocks) {
-      if (!block || typeof block !== "object") continue;
-      for (const key of Object.keys(block)) {
-        if (FORBIDDEN_KEYS.includes(key)) {
-          findings.push(
-            `${label}: forbidden key ${key} (D17: never configured)`,
-          );
-        }
-        if (SECRET_KEYS.includes(key)) {
-          findings.push(
-            `${label}: secret ${key} must be a Worker secret, not a var`,
-          );
-        }
-      }
-    }
-
-    findings.push(...findUninheritedVars(wrangler));
-
-    // Walk the parsed config so the rule is about structure, not about which line a value
-    // happens to sit on. Comments are already stripped, so prose is never a finding.
-    /** @param {unknown} node @param {string[]} trail */
-    const findPlaceholders = (node, trail) => {
-      const inEnvironmentBlock =
-        trail[0] === "env" &&
-        trail[1] !== undefined &&
-        PLACEHOLDER_ENVIRONMENTS.includes(trail[1]);
-      if (typeof node === "string") {
-        if (node.includes(PLACEHOLDER) && !inEnvironmentBlock) {
-          findings.push(
-            `wrangler.jsonc ${trail.join(".")}: ${PLACEHOLDER} is only allowed inside env.${PLACEHOLDER_ENVIRONMENTS.join(" and env.")}`,
-          );
-        }
-        return;
-      }
-      if (Array.isArray(node)) {
-        for (const [index, item] of node.entries()) {
-          findPlaceholders(item, [...trail, String(index)]);
-        }
-        return;
-      }
-      if (node && typeof node === "object") {
-        for (const [key, value] of Object.entries(node)) {
-          if (key.includes(PLACEHOLDER) && !inEnvironmentBlock) {
-            findings.push(
-              `wrangler.jsonc ${[...trail, key].join(".")}: ${PLACEHOLDER} is only allowed inside env.${PLACEHOLDER_ENVIRONMENTS.join(" and env.")}`,
-            );
-          }
-          findPlaceholders(value, [...trail, key]);
-        }
-      }
-    };
-
-    findPlaceholders(wrangler, []);
-  }
-}
-
-// Everything outside wrangler.jsonc: no environment blocks there, so any occurrence is a
+// No file carries a deploy-time placeholder any more: Clever Cloud reports the application
+// domain when it creates the app, and the database address arrives as a platform variable,
+// so there is nothing left for anyone to fill in by hand (T28). Any occurrence is a
 // finding — a forgotten placeholder in a script or an example file fails the same way.
 const placeholderFiles = [...PLACEHOLDER_SCANNED_FILES];
 const scriptsDir = path.join(repoRoot, "scripts");

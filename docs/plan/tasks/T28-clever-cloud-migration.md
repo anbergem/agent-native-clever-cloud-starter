@@ -49,6 +49,30 @@ Kept: `patches/@agent-native__core@0.176.5.patch`. The audit ceiling is cheap an
 wherever the database is over a network, and `docs/plan/upstream-issues/` keeps the reports owed
 regardless of where we host.
 
+## Survey (2026-09-23)
+
+Every file that mentions Cloudflare, Wrangler, D1 or the Worker, sorted by what it costs.
+
+**Real coupling — must be rewritten**
+
+| File | Why |
+| --- | --- |
+| `scripts/bootstrap.mjs` (113 refs) + its 873-line guard | Creates D1 databases, puts Worker secrets, writes ids into `wrangler.jsonc` |
+| `.github/workflows/deploy-production.yml` (19) / `deploy-staging.yml` (13) | `wrangler deploy`, D1 credential preflight, table-creation poll |
+| `scripts/e2e-server.mjs` (24) | Launches `wrangler dev` and owns a local D1 directory |
+| `scripts/bootstrap-org.mjs` (13) | Writes the first organisation through `wrangler d1 execute --command` |
+| `scripts/verify-promotion-artifact.mjs` (2) | Verifies a Worker bundle artifact |
+| `scripts/rename-app.mjs` (3) | Renames database names inside `wrangler.jsonc` |
+| `playwright.config.ts` (2) | Comments about the detached Wrangler process group |
+
+**One-line references** — `gen-migrations-manifest.mjs`, `lib/deployment-validation.mjs`, `check-boundaries.mjs` (a `.wrangler` ignore), `ci.yml`, `server/db/*`, `api/ready.get.ts`, `env.ts`, `env-check.ts`.
+
+**Not coupling at all.** `src/infrastructure/d1/` is a *directory name*. Nothing under `src/` or `server/` imports a Cloudflare type, references `D1Database`, or touches `env.DB` — confirmed by search. The 1,346 lines of repositories are ordinary SQL and need no work beyond the rename already done. `container.ts`'s nine "hits" are all import paths into that directory.
+
+**Docs** — 30 files, of which 11 are user-facing (`README`, `ARCHITECTURE`, `docs/{deployment,bootstrap,backups,database-and-migrations,runbook,testing,template-workflow,upgrade-playbook,repository-settings}`) and the rest are the `docs/plan/` history, which records what was true at the time and is amended rather than rewritten.
+
+**Second repository.** `../seating-arrangement` is a template instantiation with the same `scripts/` and the same `src/infrastructure/d1/` layout, one migration, and a different domain. Every change here ports mechanically.
+
 ## Steps
 
 1. **`scripts/bootstrap.mjs`** — replace the Cloudflare steps. New step list:

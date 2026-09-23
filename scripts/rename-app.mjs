@@ -226,7 +226,7 @@ function main() {
  * Runs the repository's own formatter over the rewritten files.
  *
  * A name of a different length changes where `oxfmt` breaks a line — replacing
- * `example-jobs-worker-smoke-` with something shorter lets a three-line call collapse onto
+ * `example-jobs-smoke-` with something shorter lets a three-line call collapse onto
  * one, and `oxfmt --check` (part of `pnpm lint`, part of `pnpm check`) then fails on a file
  * this script wrote. Formatting here rather than duplicating oxfmt's line-breaking rule is
  * the same choice `scripts/gen-migrations-manifest.mjs` made for the same reason.

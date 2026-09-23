@@ -3,7 +3,7 @@ import { parseArgs } from "node:util";
 
 import { CookieClient, detail } from "./lib/http-client.mjs";
 
-const USAGE = `usage: node scripts/worker-smoke.mjs --base-url <url> --mode local|staging|production
+const USAGE = `usage: node scripts/smoke.mjs --base-url <url> --mode local|staging|production
        [--qa-email <email> --qa-password <password> --expect-org-id <id>]
        [--run-id <id>] [--timeout-ms <milliseconds>]
 
@@ -257,14 +257,18 @@ export async function runSmoke(
     }
     throw new Error(last);
   });
-  await check("health uses PostgreSQL", async () => {
+  // Local runs a SQLite file and deployments run PostgreSQL, and the point of the check is
+  // that the app reached a real database rather than a default it invented — so it asserts
+  // the dialect the mode actually implies rather than one spelling everywhere (T28).
+  const expectedDialect = options.mode === "local" ? "sqlite" : "postgres";
+  await check(`health uses ${expectedDialect}`, async () => {
     const { response, body } = await client.json("/_agent-native/health", {
       signal: deadline,
     });
     assert(
       response.status === 200 &&
         body?.db === true &&
-        body?.database?.dialect === "postgres",
+        body?.database?.dialect === expectedDialect,
       `HTTP ${response.status}: ${detail(body)}`,
     );
   });
@@ -558,9 +562,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     }
     process.exitCode = await runSmoke(options);
   } catch (error) {
-    console.error(
-      `worker-smoke: ${error instanceof Error ? error.message : error}`,
-    );
+    console.error(`smoke: ${error instanceof Error ? error.message : error}`);
     process.exitCode = 1;
   }
 }
