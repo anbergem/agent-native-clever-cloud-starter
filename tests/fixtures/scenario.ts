@@ -740,7 +740,7 @@ function insertOrIgnore(
 }
 
 // The application tables. Column names and their order mirror
-// `src/infrastructure/d1/sql.ts`; `migrations/0001_init.sql` is the schema
+// `src/infrastructure/sql/sql.ts`; `migrations/0001_init.sql` is the schema
 // they describe. `jobs.accounting_reference`/`accounting_sent_at` are absent
 // because migration 0002 (T27) has not added them yet.
 const CUSTOMER_INSERT_COLUMNS =
