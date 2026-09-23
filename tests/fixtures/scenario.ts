@@ -705,15 +705,15 @@ export function seedInMemory(deps: InMemoryDependencies): void {
 // ---------------------------------------------------------------------------
 // SQL rendering (blueprint B12)
 //
-// Literal values rather than bound parameters, because the two consumers that
-// are not `@libsql/client` — `wrangler d1 execute --file` locally and against
-// remote D1 — take a `.sql` file and nothing else. Every string therefore goes
-// through `sqlText`, which is the one place a quote is escaped.
+// Literal values rather than bound parameters: the scenario is a fixed set of rows
+// shared by the seed and the tests, and every string goes through `sqlText`, which is
+// the one place a quote is escaped.
 //
-// `INSERT OR IGNORE` everywhere makes a second seed run a no-op instead of a
-// primary-key failure (T11 step 2's idempotency requirement). It also means a
-// row that already exists is left exactly as it is: the seed never overwrites
-// data someone changed by hand.
+// `ON CONFLICT DO NOTHING` everywhere makes a second seed run a no-op instead of a
+// primary-key failure (T11 step 2's idempotency requirement). It also means a row that
+// already exists is left exactly as it is: the seed never overwrites data someone
+// changed by hand. It replaced `INSERT OR IGNORE`, which says the same thing in
+// SQLite only and is a syntax error in PostgreSQL (T28).
 // ---------------------------------------------------------------------------
 
 /** A single-quoted SQL string literal, or `NULL`. Doubling the quote is the
@@ -736,7 +736,7 @@ function insertOrIgnore(
   columns: string,
   values: readonly string[],
 ): string {
-  return `INSERT OR IGNORE INTO ${table} (${columns}) VALUES (${values.join(", ")});`;
+  return `INSERT INTO ${table} (${columns}) VALUES (${values.join(", ")}) ON CONFLICT DO NOTHING;`;
 }
 
 // The application tables. Column names and their order mirror
