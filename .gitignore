@@ -33,9 +33,6 @@ dist-ssr
 .env
 .env.*
 !.env.example
-.dev.vars
-.dev.vars.*
-!.dev.vars.example
 # Bootstrap input (T24): one file holding the Cloudflare API token, the Google client secret,
 # the provider key and the QA password. Only the names-only example is committed.
 .bootstrap.env

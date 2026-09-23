@@ -7,14 +7,14 @@ have different privacy properties.
 | --- | --- | --- | --- |
 | **The audit trail** (`agent_audit_log`) | The framework | who, when, which surface, which target, redacted input, status | "Who completed that job, and from where?" |
 | **The operation ledger** (`operations`) | This application | versions, classification, the inverse, the payload | "Can this still be undone, and how?" |
-| **Structured logs** (Workers Logs) | Cloudflare | action name, outcome, error code, caller, `orgId`, duration | "Is the system healthy, and what is failing?" |
+| **Structured logs** | Clever Cloud | action name, outcome, error code, caller, `orgId`, duration | "Is the system healthy, and what is failing?" |
 
 The rule that keeps them apart: **a log line never contains a value.** Not an email, not an
 argument, not a result, not a row. If you want to know what the data was, that is the audit
 trail's job, and reading it requires being signed in as an owner or admin of that organization.
 
 - [The action log line](#the-action-log-line)
-- [Workers Logs](#workers-logs)
+- [Platform logs](#platform-logs)
 - [The audit trail](#the-audit-trail)
 - [The observability page](#the-observability-page)
 - [Health and readiness](#health-and-readiness)
@@ -73,33 +73,33 @@ the only record of what actually broke; the caller sees `INTERNAL` and the const
 A recoverable inconsistency the process carried on past with a degraded value. `details` is
 identifiers only — the row and column somebody should look at, never the stored value.
 
-## Workers Logs
+## Platform logs
 
-Enabled by `observability: { "enabled": true, "head_sampling_rate": 1 }` in `wrangler.jsonc`,
+Nothing to enable: the platform captures the application's stdout and stderr,
 inherited by every environment. Sampling is 1 because the request volume this starter is built
 for is small enough that sampling would only lose the one interesting request.
 
 ```bash
 # live
-pnpm exec wrangler tail --env production --format pretty
+clever logs --alias production
 
 # failures only
-pnpm exec wrangler tail --env production --status error
+clever logs --alias production | grep '"level":"error"'
 
 # our action lines, as JSON
-pnpm exec wrangler tail --env production --format json --search '"event":"action"'
+clever logs --alias production | grep '"event":"action"'
 
 # one action
-pnpm exec wrangler tail --env production --search '"action":"send-job-to-accounting"'
+clever logs --alias production | grep '"action":"send-job-to-accounting"'
 ```
 
-The dashboard equivalent — **Workers & Pages** → the Worker → **Logs** — is where retained logs
-are queryable. `wrangler tail` is live only: it shows what happens while you are watching, so
+The console equivalent — the application's **Logs** tab — is where retained logs are
+queryable. `clever logs` without `--since` is live only: it shows what happens while you are watching, so
 it is the tool for reproducing something, not for investigating something that happened an hour
 ago.
 
-Retention and volume limits are Cloudflare's and depend on the plan:
-<https://developers.cloudflare.com/workers/observability/logs/workers-logs/>.
+Retention and volume limits are Clever Cloud's and depend on the plan. The `xxs_sml` database
+add-on includes logs; the application's own logs are kept regardless.
 
 ## The audit trail
 
@@ -242,7 +242,7 @@ Nothing phones home. Concretely:
 Two independent checks keep it that way, and they check different things:
 
 - **Configuration**: `scripts/check-config-hygiene.mjs` (in `pnpm check` and in CI) fails if any
-  of those key names appears in `.env.example`, `.dev.vars.example`, `.bootstrap.env.example`,
+  of those key names appears in `.env.example`, `.bootstrap.env.example`,
   `agent-native.config.ts` or any `wrangler.jsonc` `vars` block.
 - **Behaviour**: every Playwright page fixture fails the test on any request whose origin
   differs from `baseURL`. So a dependency that starts calling an analytics endpoint fails the

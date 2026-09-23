@@ -480,7 +480,7 @@ above is a command and not a description.
 Rules:
 
 - **Nothing secret is ever in git.** Only `*.example` files are committed and they carry names,
-  never values. `.env`, `.dev.vars` and `.bootstrap.env` are git-ignored, and
+  never values. `.env` and `.bootstrap.env` are git-ignored, and
   `scripts/check-config-hygiene.mjs` asserts the ignore rules.
 - **No Clever Cloud credential is in `.bootstrap.env` at all.** `clever login` writes a profile
   in `~/.config/clever-cloud/`, and bootstrap reads it from there — for its own calls and to

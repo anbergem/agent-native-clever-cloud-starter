@@ -49,11 +49,7 @@ const ALLOWED_EXAMPLE_VALUES = {
 
 // `.bootstrap.env.example` joins the list so the same "names only" rule covers the bootstrap
 // input, whose real form holds the Cloudflare token and the Google client secret (T24).
-const EXAMPLE_FILES = [
-  ".env.example",
-  ".dev.vars.example",
-  ".bootstrap.env.example",
-];
+const EXAMPLE_FILES = [".env.example", ".bootstrap.env.example"];
 
 // B15/T02: the deploy-time placeholder belongs only in the `staging` and `production` blocks
 // of a committed file. Anywhere it appears it is either a placeholder someone forgot to fill in or a
@@ -63,7 +59,6 @@ const PLACEHOLDER = ["REPLACE", "ME"].join("_");
 const PLACEHOLDER_SCANNED_FILES = [
   "package.json",
   ".env.example",
-  ".dev.vars.example",
   ".bootstrap.env.example",
 ];
 
@@ -167,12 +162,7 @@ for (const file of placeholderFiles) {
 // carries prompts, model output and provider request ids. `git check-ignore -q` rejects more
 // than one pathname ("fatal: --quiet is only valid with a single pathname"), so ask about one
 // file at a time.
-for (const file of [
-  ".env",
-  ".dev.vars",
-  ".bootstrap.env",
-  "eval-evidence.json",
-]) {
+for (const file of [".env", ".bootstrap.env", "eval-evidence.json"]) {
   try {
     execFileSync("git", ["check-ignore", "-q", file], { cwd: repoRoot });
   } catch {

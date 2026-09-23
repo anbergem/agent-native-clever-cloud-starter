@@ -311,7 +311,7 @@ if (skipUsers) {
   step("users skipped (--skip-users)");
 } else {
   // `SEED_PASSWORD` is the deployed-environment override (B13); locally the B12 default is
-  // what `.env.example` and `.dev.vars.example` already name. `resolveCredential` is the
+  // what `.env.example` already names. `resolveCredential` is the
   // wrong tool here: this is a maintenance script's own environment, not a request's, so
   // there is no user or organization to resolve a credential for — and the value is the
   // password of the accounts this script is about to create, which it never logs.
