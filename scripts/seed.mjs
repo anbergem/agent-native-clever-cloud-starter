@@ -151,7 +151,7 @@ function loadScenario() {
 
 /**
  * `file:./data/app.db` (the framework's own default spelling) is not a valid file URL, so only
- * the `file://` form goes through `fileURLToPath`. Same helper as `scripts/migrate-local.mjs`.
+ * the `file://` form goes through `fileURLToPath`. Same helper as `scripts/migrate.mjs`.
  * @param {string} databaseUrl
  * @returns {string}
  */
