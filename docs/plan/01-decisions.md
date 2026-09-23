@@ -15,6 +15,9 @@ upgrade (task T22's playbook).
 
 ## D02 — Cloudflare Workers via the framework's single-file bundle
 
+**Superseded by D29 (2026-09-23).** Kept as the record of what was true, and why.
+
+
 Context: the framework documents a Nitro `cloudflare_module` preset for Workers, but at
 0.176.5 that output does not boot on workerd: it calls `setInterval` at module scope and then
 `createRequire(undefined)`. The `cloudflare_pages` preset produces a single-file bundle
@@ -29,6 +32,9 @@ with `staging` and `production` environments.
 
 ## D03 — Post-build patch for two framework stub bugs
 
+**Superseded by D29 (2026-09-23).** The bundle it patched no longer exists. The reasoning — patch narrowly, assert the match count, fail loudly on an upgrade — carried over to `patches/@agent-native__core@*.patch`.
+
+
 Context: the single-file bundle's Node built-in stubs make `fs.existsSync` and `os.homedir` safe
 only for named imports; default-import access hits a throwing proxy. The agent-chat plugin
 init and the MCP client config reader hit both, which disables agent chat, audit actions and
@@ -41,6 +47,9 @@ intended signal to revisit the patch during an upgrade.
 
 ## D04 — Workers Paid plan
 
+**Superseded by D29 (2026-09-23).** The equivalent constraint is now the PostgreSQL plan: the free `dev` tier allows five connections against a framework pool of twenty, so `xxs_sml` is the floor.
+
+
 Context: the bundle is about 13 MB raw and 4.05 MB gzip; Workers Free allows 3 MB compressed,
 Paid allows 10 MB.
 Decision: the starter requires the Workers Paid plan (5 USD per month at time of writing). CI
@@ -48,6 +57,11 @@ enforces a compressed size ceiling of 8 MiB to keep margin.
 Consequences: documented in README, bootstrap checklist and `docs/deployment.md`.
 
 ## D05 — Two database runtimes, one migration source
+
+**Revised by D29 (2026-09-23).** There is one runtime now and two *dialects*: `scripts/migrate.mjs`
+applies the same files to a local SQLite file or to PostgreSQL, through the framework's executor.
+The principle — one migration source, same files, same order, every environment — is unchanged,
+and is what made the dialect change cost a single statement.
 
 Context: the framework's Vite dev server runs on Node with a local SQLite file; Workers use D1
 through the `DB` binding. Both are the SQLite dialect.
@@ -286,13 +300,56 @@ The maintainer authorized the repository review corrections and continued implem
 Context: the maintainer asked whether a cross-platform script could perform the whole
 post-template setup, including placing secrets.
 Decision: `scripts/bootstrap.mjs` (Node, not PowerShell) performs every automatable step from a
-git-ignored input file: D1 creation in the EU jurisdiction, Wrangler config ids and URLs, the
-first deployment when needed, Worker secrets per environment (generated signing secrets never
-touch disk), GitHub environments with reviewers, GitHub secrets and variables, branch
-protection, template flag. It prints a plan by default and requires `--yes` to create cloud
+git-ignored input file. **Revised by D29 (2026-09-23)**, which changed what those steps are —
+applications, PostgreSQL add-ons, the link between them, application settings per environment
+(generated signing secrets never touch disk), the first deployment when needed, GitHub
+environments with reviewers, GitHub secrets and variables, branch protection, template flag —
+but not the shape: one input file, a plan by default, `--yes` to act, idempotent steps. It prints a plan by default and requires `--yes` to create cloud
 resources (spec section 43 forbids silent creation). Steps that cannot be automated stay manual
 and are printed at the end: Workers Paid plan, the Cloudflare API token itself, the Google OAuth
 client, the Renovate app, the first sign-in.
 Consequences: `docs/bootstrap.md` documents the script first and the manual steps second; a
 guard test drives the script against stub `wrangler`/`gh` executables so it is verified without
 cloud access.
+
+## D29 — Leave Cloudflare Workers for Clever Cloud and PostgreSQL (2026-09-23)
+
+Supersedes D02, D03 and D04; revises D05 and D28.
+
+Context: three defects in one day, all in framework code, all the same mismatch — code written
+for an always-on server with a local database, running where every such call is a network call
+that can fail to return.
+
+1. The Cloudflare build replaces `@anthropic-ai/sdk` with `export default class Anthropic {}`,
+   so the default agent engine constructs an empty object and dies on `client.messages.stream`.
+   Agent chat had never worked on a Worker.
+2. `ai-sdk:*` engines are then refused at runtime, because their availability gate calls
+   `require.resolve`, which cannot see inside a Worker bundle.
+3. `ensureAuditTables()` issues seventeen sequential DDL statements — ten of them expected to
+   throw — memoized in a promise that only resets on rejection. Against remote D1 the sequence
+   intermittently never settles, and every later request on that isolate awaits it forever.
+
+Measured on deployed staging: authenticated commands answered 4 times out of 30, degrading to 0
+of 15 on a poisoned isolate; reads answered 100% throughout. On a plain Node process with a file
+database the same build was 8 of 8 on agent chat with a 9ms first byte, and 20 of 20 on writes.
+
+Decision: move. Clever Cloud (Paris), one always-on Node process per environment, a managed
+PostgreSQL add-on per environment on the `xxs_sml` plan.
+
+Evidence it was the platform and not the application: the move needed **one** change in 1,346
+lines of repositories — `INSERT OR IGNORE` became `ON CONFLICT DO NOTHING` — because nothing
+under `src/` or `server/` imports a platform type or calls a platform API, and the framework's
+executor rewrites `?` placeholders for PostgreSQL itself. `src/infrastructure/d1/` was a
+directory name, not a dependency.
+
+Verified after the move, against deployed staging: eleven of eleven smoke checks green including
+agent chat SSE; `complete-job`, `archive-job` and `create-job` at 10 of 10 each, averaging
+130ms; agent chat 8 of 8. The database health check went from 260ms to 6ms.
+
+Consequences: `wrangler.jsonc`, the Worker build, both bundle patches, the D1 backup and restore
+scripts, the uninherited-vars rule, the bundle-size guard and `wrangler` itself are deleted. One
+framework patch is kept (`patches/@agent-native__core@0.176.5.patch`, bounding the audit write)
+and guarded so an upgrade has to look at it. What is promoted is now a commit rather than a
+bundle, which is a narrower guarantee, stated as such in `ARCHITECTURE.md` section 11.
+`docs/plan/tasks/T28-clever-cloud-migration.md` is the worked plan;
+`docs/plan/upstream-issues/` holds the three reports owed to Builder.io.

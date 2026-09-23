@@ -2768,3 +2768,47 @@ Worth keeping in view: this is the third shape of the same patch in one afternoo
 first guarded nothing, the second wedged the client, the third answered fast and lost an
 ordering guarantee. Each was caught by something that runs — a deploy, a local smoke, CI —
 and none by reading the code and feeling confident.
+
+---
+
+## 2026-09-23/24 — The migration, and what the survey found
+
+T28 executed. The thing worth recording is not the work but a measurement taken before it: a
+survey of every file mentioning Cloudflare, Wrangler, D1 or the Worker, sorted by what it would
+actually cost.
+
+**The application was never the obstacle.** `src/infrastructure/d1/` was a *directory name*.
+Nothing under `src/` or `server/` imported a Cloudflare type, referenced `D1Database`, or
+touched `env.DB` — confirmed by search, not by memory. The 1,346 lines of repositories needed
+**one** change, `INSERT OR IGNORE` → `ON CONFLICT DO NOTHING`, because the framework's executor
+rewrites `?` placeholders for PostgreSQL itself and the 86 lines of SQLite DDL in `migrations/`
+are already the intersection both dialects accept.
+
+The cost was entirely in the deployment half: `scripts/bootstrap.mjs` (113 references) and its
+873-line guard, two deploy workflows, the e2e launcher, `bootstrap-org.mjs`, and eleven
+user-facing documents.
+
+Four things the platform taught us, each from a failure rather than a manual:
+
+| Failure | Cause | Now |
+| --- | --- | --- |
+| `Killed  pnpm install` | The default builder shares the application's instance and cannot install a thousand packages | A dedicated M build instance, set by bootstrap |
+| Build fails on `react-dom/client` | The platform installs `--prod` but builds on its own machine; the toolchain is in `devDependencies` | `CC_NODE_DEV_DEPENDENCIES=install` |
+| `too many connections for role` | The free `dev` plan allows five; the framework opens twenty, hardcoded | `xxs_sml` is the floor, and bootstrap refuses `dev` with the reason |
+| The app fell back to SQLite | Clever Cloud injects `POSTGRESQL_ADDON_URI`, not `DATABASE_URL` | `server/plugins/00-database-url.ts` maps it at boot |
+
+That last one also corrects something written here earlier: a web search claimed Clever Cloud
+injects `DATABASE_URL`. It does not. The claim was repeated into `T28` before being checked
+against a real linked add-on, which is the same mistake in a smaller package as the five refuted
+theories above it.
+
+**Two guarantees changed, and both are stated rather than glossed.** Promotion now proves a
+*commit* rather than bytes, because the platform builds from the git push. And application
+settings are *readable back* with `clever env`, where Worker secrets were not — so the Clever
+Cloud account is now inside the blast radius of a compromise in a way it was not before.
+`docs/runbook.md` says so in the secrets table rather than leaving it to be discovered.
+
+One thing deliberately not done: `app/root.tsx` still passes `sseUrl: false`. That existed
+because the Workers runtime cancelled a held-open response; an always-on process does not, so
+the event stream is available again for one line. Changing how every client receives updates
+deserves its own measurement, not a free ride on a migration.
