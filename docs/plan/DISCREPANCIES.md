@@ -2851,3 +2851,25 @@ Two things to keep:
   documents (`doc: 'Built-in engines to register, e.g. ["ai-sdk:openai"]'`). Passing that
   spelling is read as a single engine name and refused with `names unknown built-in engine(s):
   ["anthropic"]`. Worth an upstream note.
+
+---
+
+## 2026-09-24 — Deleting two gitignore lines committed a secrets file
+
+`.dev.vars` and nineteen `.wrangler/state` SQLite files reached a public repository, in
+`f6bfb51` and `5caf46d`, and were pushed.
+
+Both gitignore removals were individually correct. `.dev.vars` was Wrangler's secrets file and
+nothing reads it any more; `.wrangler/` was replaced by `.e2e/`. What was missing is the step
+between them: **a machine that ran the Cloudflare version still has both directories on disk**,
+so removing the ignore rules made them trackable, and a habitual `git add -A` committed them.
+The file held a real `BETTER_AUTH_SECRET` and `SEED_PASSWORD`.
+
+The rule this repository now follows: **removing a gitignore entry is a two-step change.** Check
+what becomes trackable before committing — `git status --short` immediately after editing
+`.gitignore`, not after staging. The entries are restored with a comment saying why they outlive
+the tool that needed them.
+
+The maintainer's call was to rotate later, the data being synthetic and the account
+non-critical. Recorded because the mechanism is general and would repeat: every template
+instantiation that migrates carries the same two stale directories.

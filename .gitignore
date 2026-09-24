@@ -78,3 +78,11 @@ learnings.md
 
 # Private state written by the e2e launcher.
 .e2e/
+
+# Local secrets and leftover Wrangler state. `.dev.vars` was Wrangler's secrets file
+# and nothing reads it any more, but a machine that ran the Cloudflare version still
+# has both — and removing these two lines while they exist on disk is how they got
+# committed once (DISCREPANCIES.md, 2026-09-24). They stay ignored.
+.dev.vars
+.dev.vars.*
+.wrangler/
