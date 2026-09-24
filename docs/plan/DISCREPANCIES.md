@@ -2906,3 +2906,33 @@ What generalises: **a migration's grep must cover assertions, not only call site
 Cloudflare references that mattered were not the ones naming `wrangler` — those were obvious —
 but the one encoding a platform assumption as a production-only invariant, in a validator whose
 own tests agreed with it.
+
+---
+
+## 2026-09-24 — A build artifact that is a dotfile uploads as nothing, and the job stays green
+
+The e2e job failed on both repositories with `Artifact not found for name: server-build`,
+while the `verify` job that produces it passed.
+
+`verify` builds once and hands `.output/` to `e2e` (D21). `.output` begins with a dot, and
+`actions/upload-artifact@v4` excludes hidden paths unless `include-hidden-files: true`. Its
+default for a path that matches nothing is `if-no-files-found: warn`, so the step printed
+
+```
+##[warning]No files were found with the provided path: .output/. No artifacts will be uploaded.
+```
+
+and **exited zero**. The producing job was green, the branch looked green until the dependent
+job ran, and the error surfaced one job later pointing at the consumer rather than the cause.
+
+This arrived with T28 and could not have arrived before it: the Cloudflare artifact was
+`dist/worker.js`, which is not hidden. Renaming the thing being built changed whether the
+default applied.
+
+Two things worth keeping:
+
+- **`if-no-files-found: warn` turns a missing build into a passing step.** Anywhere the
+  artifact is load-bearing — and it is, because nothing rebuilds it downstream — the setting
+  should be `error`, so the failure lands on the job that caused it.
+- A platform migration changes paths, and **a path's leading character can be semantic**. Not
+  something a grep for `wrangler` would ever surface.
