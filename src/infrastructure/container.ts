@@ -11,8 +11,8 @@
  * - The repository objects are memoised. They are stateless closures over a
  *   way to reach the database, so building them per request would be waste.
  * - The executor is not. `getDbExec()` is called inside every repository
- *   method, because on Workers it resolves the D1 binding of the request being
- *   served; a cached executor would outlive its request and, worse, could be
+ *   method, because it resolves against the framework's current request
+ *   context; a cached executor would outlive its request and, worse, could be
  *   handed to the next one.
  */
 

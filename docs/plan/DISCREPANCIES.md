@@ -2873,3 +2873,36 @@ the tool that needed them.
 The maintainer's call was to rotate later, the data being synthetic and the account
 non-critical. Recorded because the mechanism is general and would repeat: every template
 instantiation that migrates carries the same two stale directories.
+
+---
+
+## 2026-09-24 — A platform migration inverts a startup rule, and staging cannot catch it
+
+`validateEnvironment` refused to start production when `DATABASE_URL` was set:
+
+```
+DATABASE_URL must not be set in production; the Worker reaches D1 through its binding
+```
+
+That rule was right on Cloudflare, where production reached D1 through a binding and a
+connection string meant somebody had pointed production somewhere by hand. After T28 it is
+exactly backwards: production reaches a managed PostgreSQL add-on *through* the connection
+string, which `server/plugins/00-database-url.ts` maps from `POSTGRESQL_ADDON_URI` before
+`00-env-check` runs. The first production promotion would have thrown at boot.
+
+Two reasons it survived the migration:
+
+- **`validateEnvironment` has no `staging` rule set**, so the deployed staging application never
+  evaluated the branch. Every smoke run was green while the production path was broken. A rule
+  that only one environment exercises is only tested by deploying that environment.
+- **Three unit tests asserted the old behaviour** and passed, because they were written against
+  the rule rather than against the intent. `production forbids DATABASE_URL when present at all`
+  is a test that cannot survive its premise changing — it names the mechanism, not the goal.
+
+The rule now requires `DATABASE_URL` in production and refuses a `file:` URL there, the case that
+would put production on a SQLite file inside a container replaced on every deploy.
+
+What generalises: **a migration's grep must cover assertions, not only call sites.** The stale
+Cloudflare references that mattered were not the ones naming `wrangler` — those were obvious —
+but the one encoding a platform assumption as a production-only invariant, in a validator whose
+own tests agreed with it.

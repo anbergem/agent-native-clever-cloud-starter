@@ -23,8 +23,8 @@ export async function assertPortAvailable(port) {
   );
 }
 
-/** Wrangler launches workerd descendants. The child is spawned detached so its process
- * group is separate from this verifier's group; signalling -pid cannot hit the parent. */
+/** The server launcher spawns descendants of its own. The child is spawned detached so its
+ * process group is separate from this launcher's group; signalling -pid cannot hit the parent. */
 export async function terminateProcessGroup(child, graceMs = 3_000) {
   if (process.platform === "win32") {
     if (child.exitCode === null && child.signalCode === null)
@@ -32,9 +32,9 @@ export async function terminateProcessGroup(child, graceMs = 3_000) {
     return;
   }
 
-  // `child.exitCode` only describes the Wrangler launcher. workerd can still
-  // be alive in its detached process group after that launcher exits, so the
-  // process group is the lifecycle authority. The group id is the direct
+  // `child.exitCode` only describes the launcher `pnpm start` runs. A server
+  // process can still be alive in the detached process group after that
+  // launcher exits, so the process group is the lifecycle authority. The group id is the direct
   // child's pid, assigned when `spawn({ detached: true })` created it.
   const launcherGone = () =>
     child.exitCode !== null || child.signalCode !== null;

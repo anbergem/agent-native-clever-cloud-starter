@@ -76,9 +76,10 @@ gh run watch <run-id>
 ```
 
 `confirm` must be the literal string `deploy`. The run validates the staging run and its
-deployment manifest, checks out that exact commit, downloads that exact bundle, verifies its
-`BUILD_INFO.json`, `HEAD` and patch-marker hash, records a Time Travel bookmark, migrates,
-deploys and runs the read-only smoke. Any of those failing stops it before the deploy.
+deployment manifest, checks out that exact commit, verifies with
+`scripts/verify-promoted-commit.mjs` that the checkout really is the commit the manifest names,
+records the database backups that already exist, migrates, deploys and runs the read-only
+smoke. Any of those failing stops it before the deploy.
 
 ## Roll back the deployed code
 
@@ -405,8 +406,8 @@ Assume the attacker has whatever that account could reach. Speed matters more th
    version rule and the policy allow it. What cannot be reversed:
    - anything `irreversible` — an accounting export that was accepted;
    - anything a newer change has moved past, which will refuse with `CONFLICT`. For those,
-     Time Travel to before the incident is the option, and it costs everyone else's work since
-     then.
+     restoring the database to before the incident is the option — `docs/backups.md` has the
+     procedure — and it costs everyone else's work since then.
 6. **Rotate anything the account could have read.** If they were an owner or admin: the
    Clever Cloud credentials, the Anthropic key, any vendor credential. Note that application
    settings *are* readable with `clever env`, so anyone with access to the Clever Cloud account

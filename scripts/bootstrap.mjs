@@ -2,7 +2,7 @@
 // One-shot post-template setup (decision D28, original spec section 43, docs/bootstrap.md).
 //
 // Every step of the bootstrap that a machine can do, done from one git-ignored input file:
-// D1 databases in the EU jurisdiction, the Wrangler ids and URLs, the first deployment when
+// the two applications and their PostgreSQL add-ons in an EU region, the first deployment when
 // an application does not exist yet, application settings per environment, GitHub environments with
 // reviewers, GitHub secrets and variables, branch protection and the template flag.
 //

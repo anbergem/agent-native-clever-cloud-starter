@@ -40,7 +40,7 @@ const ENVIRONMENTS = ["staging", "production"];
 
 const USAGE = `Usage: node scripts/bootstrap-org.mjs --env <staging|production> --name "<Org>" --owner <email>
 
-  --env <name>      Wrangler environment to write to. Required; there is no default, because
+  --env <name>      Deployment environment to write to. Required; there is no default, because
                     the default would be production for somebody.
   --name "<Org>"    Organization display name. Its id is derived from it, so re-running with
                     the same name changes nothing.

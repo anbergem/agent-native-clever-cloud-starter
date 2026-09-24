@@ -6,7 +6,7 @@
  * fixture, run after run. `buildScenario()` is the single composition every
  * consumer goes through: `seedInMemory` loads it into an in-memory
  * `Dependencies`, and `buildScenarioSql()` renders the same objects as
- * `INSERT OR IGNORE` statements for the Node SQLite file and for D1. The two
+ * upsert statements for the Node SQLite file and for PostgreSQL. The two
  * can therefore not drift. `scripts/seed.mjs` creates the user accounts over
  * HTTP (never SQL); this file never touches `user`-shaped tables.
  *
