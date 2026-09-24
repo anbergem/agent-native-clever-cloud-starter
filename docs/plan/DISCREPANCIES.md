@@ -2812,3 +2812,42 @@ One thing deliberately not done: `app/root.tsx` still passes `sseUrl: false`. Th
 because the Workers runtime cancelled a held-open response; an always-on process does not, so
 the event stream is available again for one line. Changing how every client receives updates
 deserves its own measurement, not a free ride on a migration.
+
+---
+
+## 2026-09-24 — Removing `AGENT_ENGINE` made `pnpm check` take 21 minutes
+
+`tests/guards/eval-json.test.mjs` went from 2 seconds to **910**, measured on its own. After the
+fix below it is 15, and `pnpm check` is 29 seconds end to end.
+
+One correction to my own first reading of this: I also recorded `pnpm check` at 21 minutes, then
+12, then 8, and treated each as the real number. They were not. Six `agent-native start`
+processes from earlier local test runs had been alive for **seven days**, and several of my own
+timing runs were overlapping each other — the machine was the variable, not the suite. Killing
+the orphans and measuring one thing at a time gave 29 seconds. The guard regression below is
+real and worth fixing; the check-suite figures were contention, and quoting them as a
+regression would have sent the next person hunting for a problem that was not there.
+
+Cause: deleting the `AGENT_ENGINE` workaround (correct, it was Cloudflare-only) removed a pin
+that was accidentally load-bearing. The guard strips every provider credential so that
+`resolveEngine` refuses before any request is made, and asserts the "No LLM provider is
+connected" error. With nothing pinned, `detectEngineFromEnv()` walks the whole registry and
+reaches `ai-sdk:ollama` — which needs no API key and therefore looks *available*. Every eval
+then waited out a connect timeout against a local Ollama that is not running.
+
+Pinning `AGENT_ENGINE=ai-sdk:anthropic` instead is not enough: with no key the AI-SDK engine
+retries against the real API and still costs about a minute per eval. 301 seconds, not 15.
+
+What works is narrowing the registry: `AGENT_BUILT_IN_ENGINES=anthropic` registers one engine,
+which needs a key, so `resolveEngine` refuses with nothing to attempt. 15 seconds, and the
+assertion the test exists for is unchanged.
+
+Two things to keep:
+
+- **A test that depends on provider *absence* is depending on the registry, not on the
+  environment.** Removing credentials is not the same as removing capability, and Ollama is the
+  engine that makes the difference visible.
+- The option is a **comma-separated list**, not the JSON array the framework's own metadata
+  documents (`doc: 'Built-in engines to register, e.g. ["ai-sdk:openai"]'`). Passing that
+  spelling is read as a single engine name and refused with `names unknown built-in engine(s):
+  ["anthropic"]`. Worth an upstream note.

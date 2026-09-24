@@ -189,7 +189,8 @@ Consequences: documented in `docs/observability.md`.
 
 ## D18 — Naming of the sample application
 
-Decision: package name `agent-native-cloudflare-starter`; Worker name `example-jobs`
+Decision: package name `agent-native-cloudflare-starter` (renamed to
+`agent-native-clever-cloud-starter` by D29); Worker name `example-jobs`
 (`example-jobs-staging`, `example-jobs-production`); display name "Example Jobs"; sample
 organization "Acme Services"; second organization "Other Company" for isolation tests.
 Consequences: the bootstrap checklist's first step renames all of these.
