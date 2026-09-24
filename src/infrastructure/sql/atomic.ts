@@ -38,8 +38,8 @@ export interface DbExecLike {
 
 /**
  * Either an executor or a way to get one. The container passes a function,
- * because on Workers the framework's executor is bound to the request and must
- * not be cached across them; a test can pass an executor directly.
+ * because the framework's executor is bound to the current request context and
+ * must not be cached across requests; a test can pass an executor directly.
  */
 export type DbExecSource =
   | DbExecLike
