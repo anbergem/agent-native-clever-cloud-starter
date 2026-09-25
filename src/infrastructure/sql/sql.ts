@@ -11,9 +11,9 @@
  * Two shapes recur and are worth reading once:
  *
  * - Guarded insert — `INSERT INTO t (...) SELECT ?, ?, … WHERE EXISTS (…)`.
- *   D1 has no interactive transactions, so a precondition cannot be checked in
- *   application code between two statements; it is expressed inside the
- *   statement instead. The insert then affects zero rows when the guard fails,
+ *   The precondition is expressed inside the statement rather than checked in
+ *   application code between two statements — see `atomic.ts` for why that
+ *   survived the move off D1 (T28). The insert then affects zero rows when the guard fails,
  *   and the caller decides what that means (B11).
  * - Versioned update — `… WHERE org_id = ? AND id = ? AND version = ?`. A
  *   stale write affects zero rows rather than overwriting a newer one, and the
@@ -130,9 +130,15 @@ const ACCOUNTING_EXPORT_COLUMNS =
 export const SELECT_ACCOUNTING_EXPORT = `SELECT ${ACCOUNTING_EXPORT_COLUMNS} FROM accounting_exports
 WHERE org_id = ? AND job_id = ? LIMIT 1`;
 
-export const INSERT_PENDING_ACCOUNTING_EXPORT = `INSERT OR IGNORE INTO accounting_exports (${ACCOUNTING_EXPORT_COLUMNS})
+// `ON CONFLICT DO NOTHING` rather than `INSERT OR IGNORE`: the two mean the same
+// thing here, but the first is standard and the second is SQLite-only. This was the
+// single statement in the application that could not be handed to Postgres as
+// written. SQLite needs the SELECT to carry a WHERE clause before an upsert clause,
+// or the parser cannot tell `ON CONFLICT` from a join's `ON` — it does.
+export const INSERT_PENDING_ACCOUNTING_EXPORT = `INSERT INTO accounting_exports (${ACCOUNTING_EXPORT_COLUMNS})
 SELECT ?, ?, ?, ?, ?, NULL, NULL, ?, ?, NULL
-WHERE EXISTS (SELECT 1 FROM jobs WHERE org_id = ? AND id = ? AND version = ? AND status = ? AND accounting_reference IS NULL)`;
+WHERE EXISTS (SELECT 1 FROM jobs WHERE org_id = ? AND id = ? AND version = ? AND status = ? AND accounting_reference IS NULL)
+ON CONFLICT DO NOTHING`;
 
 export const RECORD_ACCOUNTING_ACCEPTANCE = `UPDATE accounting_exports
 SET external_reference = COALESCE(external_reference, ?)

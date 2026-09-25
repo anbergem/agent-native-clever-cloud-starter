@@ -2227,3 +2227,774 @@ over the public internet.
 Resolution: 2026-09-15 — applied; `pnpm check` and `pnpm verify:worker` (12/12) pass. Whether 45s
 is enough is not proven: the next staging run is the test, and if `create-job` still exceeds it
 the problem is not cold-start latency and the hunt resumes with better numbers than before.
+
+## 2026-09-15 B20 — `create-job` hangs only in the smoke, and the agent errors on staging
+
+Expected (plan reference): with a 45s per-request ceiling (previous entry) a cold deployment has
+room to answer, and the staging smoke should pass.
+
+Observed, on the first run with that ceiling:
+
+```
+[ok]   authenticated list-jobs
+[fail] reversible write…: POST /_agent-native/actions/create-job failed after 45000ms at most
+[fail] agent chat SSE: stream began with error:
+       {"type":"error","error":"Cannot read properties of undefined (reading 'stream')","seq":4}
+[ok]   unauthenticated MCP challenge
+```
+
+Two separate findings, and the first refutes the cold-start explanation the ceiling was based on.
+
+**1. `create-job` does not finish in 45s — but only inside the smoke.** The same call, against the
+same deployment, succeeded from a GitHub runner in 2203ms and 1518ms in the throwaway diagnostic
+job, and in 468ms from a developer machine. Three environments where it works, one where it does
+not. The distinguishing feature is what runs immediately before it: the smoke starts **zero
+seconds** after `Reset QA scenario` finishes (18:15:44 → 18:15:44), and that step is
+`seed.mjs --target d1-remote --reset`, a bulk delete-and-reinsert against the same remote D1. The
+diagnostic job ran standalone with no preceding reset. That makes "the first write after a bulk
+remote reset does not complete" the hypothesis the evidence actually supports — untested, and to be
+tested rather than believed, given how many hypotheses this thread has already buried.
+
+**2. The deployed agent chat fails with a TypeError**, not a timeout: `Cannot read properties of
+undefined (reading 'stream')` at `seq 4`. With a longer ceiling the stream opens and then errors,
+which is new: previously it only ever timed out. This is a real defect on a deployed Worker and may
+share a root with the agent-chat hang recorded under local `wrangler dev` (2026-09-11), where the
+request died on a D1 query that never returned. It is not explained by anything in this repository's
+code so far.
+
+Impact: staging still does not go green, but neither failure indicts the application as exercised by
+hand — every action works from a developer machine and from a runner outside the smoke.
+
+Proposed handling: (1) test the reset hypothesis by adding the same remote reset to the throwaway
+diagnostic immediately before `create-job`; if it reproduces, the smoke needs to wait for D1 to
+settle, or the reset needs to be gentler. (2) Capture the agent-chat TypeError as its own upstream
+report — it is a framework stack, not ours.
+
+Resolution: open. Recorded so the next person starts from the evidence rather than from the three
+wrong hypotheses that preceded it.
+
+## 2026-09-15 D18 — staging's EU jurisdiction is why CI could never smoke it
+
+Expected (plan reference): D18 and T24 create both D1 databases with `--jurisdiction eu`, and B20's
+staging smoke exercises the deployed Worker after every deploy.
+
+Observed: the smoke's `create-job` failed at a 15s ceiling, then at 45s. A throwaway diagnostic then
+measured the same request from a GitHub runner across several dispatches: 2037ms, 1677ms, 2203ms,
+1518ms, 6134ms — and NO RESPONSE at 20s and at 60s, with a plain `list-customers` read also timing
+out at 20s on one pass. From a European developer machine the same call is 468ms every time. The
+hypothesis that the QA reset caused it did not survive: a baseline probe with no reset at all
+timed out too, and a post-reset probe succeeded.
+
+Cause, from `wrangler d1 info`:
+
+```
+name               acme-ops-staging
+running_in_region  EEUR
+jurisdiction       eu
+```
+
+and from the runner, `Azure Region: centralus`, serving colos SJC, ATL and IAD. Every CI request is
+a US runner reaching a US Cloudflare colo that then queries a database in Eastern Europe.
+`create-job` makes several sequential D1 round trips — the idempotency lookup, then the atomic
+batch — so it pays that crossing several times, with the variance a shared transatlantic path has.
+No smoke timeout fixes this: it is the deployment's shape, not a bug, and the numbers above cross
+an order of magnitude.
+
+Impact: the staging smoke could never be reliable, and three rounds of timeout-raising treated the
+symptom. Production is unaffected — EU users reach EU colos reaching an EU database, which is the
+arrangement the jurisdiction exists for.
+
+Proposed handling: keep the pin where it means something and drop it where it does not.
+Jurisdiction is a data-residency control; production holds real people's data and stays `eu`, while
+staging holds only the synthetic scenario (`Example Customer A`, `example.invalid`), so there is
+nothing to keep resident. `bootstrap.mjs` now creates production with `--jurisdiction eu` and
+staging without, `tests/guards/bootstrap.test.mjs` asserts exactly that asymmetry, and
+`docs/bootstrap.md` explains the reasoning and how to pin both if your CI runs in the EU.
+
+Correction, same day, from actually running it: creating a database *without* `--jurisdiction`
+still produced `Successfully created DB 'acme-ops-staging-2' in region EEUR`. D1 places a new
+database near whoever runs the command, so dropping the pin does not move it — a European
+maintainer gets EEUR either way. `wrangler d1 create --help` supplies the missing half: there is a
+`--location` hint (`weur`, `eeur`, `apac`, `oc`, `wnam`, `enam`), and "if jurisdictions are set,
+the location hint is ignored". So removing the jurisdiction is what *permits* a hint; the hint is
+what actually moves the database. The first version of this fix would have changed nothing
+measurable.
+
+Resolution: 2026-09-15 — `bootstrap.mjs` creates production with `--jurisdiction eu`, and staging
+unpinned plus an optional `--location` from `STAGING_D1_LOCATION`, validated against D1's six
+choices and empty by default (D1 chooses, near you). `.bootstrap.env.example` explains that
+GitHub-hosted runners are in the United States, so a European maintainer usually wants `enam`.
+An existing database cannot be moved — neither jurisdiction nor location is changeable after
+creation — so an existing deployment has to create a new one and repoint `wrangler.jsonc`.
+
+## 2026-09-15 B12 — the seed derived the database name and silently seeded the wrong one
+
+Expected (plan reference): B12's QA reset seeds the deterministic scenario into the environment the
+deployed Worker reads.
+
+Observed: with staging repointed at a new database, the deploy's reset reported
+
+```
+seed: reset: removed the scenario rows from acme-ops-staging
+seed: applied the scenario to acme-ops-staging
+```
+
+while `wrangler.jsonc`'s `env.staging.d1_databases[0]` had become `acme-ops-staging-2`. The seed
+wrote the scenario into a database the Worker no longer reads, and reported success. The smoke then
+failed on `QA login and organization` with `"orgId": null, "orgs": []`, and every action after it
+with `No active organization` — an authorization failure that looks nothing like the misdirected
+write behind it.
+
+Cause: `scripts/seed.mjs` computed the target as `` `${BASE_NAME}-${wranglerEnv}` ``, duplicating a
+fact that already lives in `wrangler.jsonc`. The two agreed until the day a database had to be
+recreated — and the recreation is exactly the situation the copy cannot survive, because neither
+jurisdiction nor location can be changed in place.
+
+Impact: a deploy that migrated, deployed and reset successfully, then failed the smoke for a reason
+unrelated to everything it reported doing. The wasted signal is the point: the run said "applied the
+scenario" and it had, to the wrong database.
+
+Proposed handling: read `env.<env>.d1_databases[0].database_name` from `wrangler.jsonc` for
+`--target d1-remote`, and refuse rather than guess when it is absent. The local targets keep their
+derived names: nothing else defines them, and there is no second source to drift from.
+
+Resolution: 2026-09-15 — applied; `pnpm check` passes. The template's own `package.json` still
+spells the staging database name in `db:migrate:staging`, which is a second copy of the same fact —
+left alone here because `wrangler d1 migrations apply` takes the name as an argument, but worth
+revisiting if it drifts too.
+
+## 2026-09-15 D06 — the deploy seeds before the framework has created its tables
+
+Expected (plan reference): D06 and F8 give the schema two owners — the app's migrations, applied by
+`wrangler d1 migrations apply`, and the framework's own tables (`organizations`, `org_members`, the
+audit log), which it creates at runtime on the first request that touches the database. T11 already
+recorded that the seed must run after the app has touched the database.
+
+Observed: on a genuinely new staging database the deploy failed in `Reset QA scenario`:
+
+```
+🌀 Executing on remote database acme-ops-staging (ccbfda85-…)
+✘ [ERROR] no such table: org_members: SQLITE_ERROR
+```
+
+The workflow's order is migrate → deploy → reset → smoke. Migration creates the app's tables only;
+deployment serves no request; so the reset is the first thing to touch the database, and the
+framework's tables do not exist yet.
+
+Impact: the deploy pipeline could never bootstrap a fresh environment — the exact path a new
+installation of this template takes. It went unnoticed because every previous staging deploy ran
+against a database that earlier smoke attempts had already woken, which is a property of this
+repository's history rather than of the pipeline.
+
+Proposed handling: a step between deploy and reset that polls `/_agent-native/health` until it
+reports `"db":true`, bounded to 30 attempts. That is the framework's own readiness endpoint, it is
+public, and reaching it is what makes the framework create its tables. Failure says why the seed
+would have failed rather than leaving `no such table` as the first sign.
+
+Resolution: 2026-09-15 — applied to `deploy-staging.yml`; `pnpm lint:workflows` is clean. Production
+does not need it: its first deploy is a promotion of an artifact that staging has already exercised,
+and `bootstrap-org.mjs` is a manual step the operator runs after signing in, which is itself a
+request that touches the database.
+
+## 2026-09-15 B20 — a deployed POST sometimes returns nothing, while the Worker says it succeeded
+
+Expected (plan reference): B20's staging smoke fails when the deployment is wrong.
+
+Observed, after the database was moved to ENAM and the seeding order fixed, across three diagnostic
+phases on the same run:
+
+| Phase | first `create-job` | second `create-job` |
+| --- | --- | --- |
+| 1 | no response (20s) | 200 in 3778ms |
+| 2 | no response (20s) | no response (60s) |
+| 3 | no response (20s) | 200 in 2612ms |
+
+Reads in the same sessions answered in 128-390ms throughout. Geography is not the explanation: the
+database now sits in ENAM, the same continent as the runner, and the pattern is unchanged from
+EEUR. Nor is it the QA reset: a baseline phase with no reset behaves identically.
+
+A run with `wrangler tail` attached caught the Worker's own view of a first write that did answer:
+
+```
+{"u":"/_agent-native/actions/create-job","o":"ok","ex":[],
+ "lg":["{\"action\":\"create-job\",\"outcome\":\"success\",\"caller\":\"http\",\"durationMs\":214}"]}
+```
+
+**214ms server-side, no exception, outcome ok.** When the same call produces no response there is no
+trace event at all and nothing logged. So the application is not slow and does not fail; something
+between the runner and the edge loses the request or its response, intermittently, for POSTs.
+
+Impact: the smoke reported a defect that does not exist, repeatedly, and three fixes — a larger run
+budget, a per-request ceiling, a nearer database — each moved the symptom without touching it.
+
+Proposed handling: one retry, only when a request produced no response at all, and never when the
+run budget is already gone. That is safe here by design rather than by luck: creates carry an
+idempotency key and replay to the same resource, and every other command is guarded on
+`expectedVersion`, so a duplicate delivery is refused rather than applied twice (B11). The retry is
+logged as `[retry] <action>` so a run that needed one says so.
+
+Resolution: 2026-09-15 — applied; `pnpm check` and `pnpm verify:worker` (12/12) pass. The transport
+behaviour itself is **not explained**, and the retry does not explain it. What is established is
+where it is not: not the application, not the database's region, not the seeding order. If it turns
+out to matter for real users — a browser POST losing its response would be visible as a hung save —
+this deserves a proper investigation with Cloudflare rather than a tolerant test client.
+
+## 2026-09-15 B11 — the retry proved the writes arrive, and disproved the argument for retrying
+
+Expected (previous entry): retrying a lost POST is safe because creates carry an idempotency key
+and every other command is guarded on `expectedVersion`, so a duplicate is refused rather than
+applied twice.
+
+Observed, on the first staging run with that retry:
+
+```
+[retry] undo-operation: no response (POST …/undo-operation failed after 45000ms at most)
+[fail]  reversible write…: HTTP 409: {"error":"Already undone","errorCode":"CONFLICT"}
+```
+
+The claim was half right, and the half that was wrong is the important one. B11's guard did exactly
+its job: the first `undo-operation` **reached the Worker and applied**, and the duplicate was
+refused. The data was never at risk. But the smoke asserts the retry's status, so a guard working
+correctly reads as a failure — the retry converted a lost response into a false negative rather
+than recovering from it.
+
+It also settles what the transport problem is. The request arrives and is processed; only the
+reply is lost. That is now observed twice: once through `wrangler tail` (`create-job … outcome ok,
+durationMs 214` with no reply reaching the client) and once here, where the state change survives
+into a subsequent request.
+
+Proposed handling: after a lost response, assert on the **record**, not on the reply that happened
+to survive. The undo step now catches a `409` following a retry, logs `[recovered] undo-operation`,
+re-reads the job through `get-job` and asserts the status there.
+
+Resolution: 2026-09-15 — applied; `pnpm check` and `pnpm verify:worker` (12/12) pass. The same
+exposure exists in principle for `complete-job`, which is also version-guarded: a lost response
+followed by a retry would answer `409` and fail the same way. It is left alone deliberately —
+unobserved, and guessing at a second recovery path without a failure to read would be inventing
+requirements. If it appears, the pattern above is the one to copy.
+
+## 2026-09-15 B11 — the same exposure, on the next run, for `complete-job`
+
+Expected (previous entry): `complete-job` shares `undo-operation`'s exposure to a lost response in
+principle, and was left alone as unobserved.
+
+Observed, on the very next staging run:
+
+```
+[retry] create-job: no response (…failed after 45000ms at most)
+[retry] complete-job: no response (…failed after 45000ms at most)
+[fail]  reversible write…: HTTP 409: {"error":"The job was changed by someone else","errorCode":"CONFLICT"}
+```
+
+Two lost replies in a single run. `create-job` recovered by itself — its idempotency key made the
+replay return the same resource, which is B11 working exactly as intended. `complete-job` did not:
+the first attempt had applied and moved the version, so the retry met the version guard.
+
+Impact on the judgement, not just the code: "unobserved, so leave it" was the wrong call at a rate
+of roughly one lost reply per run. The evidence for the second case was one run away, and the cost
+of waiting was another full deploy cycle.
+
+Proposed handling: one helper, `guardedCommand`, replacing the undo-only recovery. On a `409` after
+a retry it re-reads the job through `get-job` **and** recovers the operation id from
+`list-recent-activity`, because the caller needs that id to undo what it just did — a detail the
+undo-only version did not have to solve.
+
+Resolution: 2026-09-15 — applied to `complete-job` and `undo-operation`; `pnpm check` and
+`pnpm verify:worker` (12/12) pass. `create-job` needs nothing: idempotent replay is its recovery.
+
+## 2026-09-15 B20 — connection reuse was not it either; stopping the local hunt
+
+Expected (previous entry): sending `connection: close` on writes would remove the window in which a
+pooled connection is closed after the Worker has handled a request.
+
+Observed: no change. `create-job` still lost both its attempts on the next staging run. The theory
+is dead, and the change is reverted rather than left in on the strength of it — a handshake per
+write is a real cost and it bought nothing.
+
+Five explanations have now been tested against evidence and refuted: cold start (a 45s ceiling
+failed identically), geography (moving the database from EEUR to ENAM changed nothing), the QA
+reset (a baseline phase with no reset behaves the same), D1's `atomicBatch` (the same call
+succeeds from a runner standalone), and connection reuse (this entry).
+
+What is established, and is not in doubt:
+
+- **The application is correct.** `wrangler tail` shows `create-job … outcome ok, durationMs 214`.
+  Every action works from a developer machine in under 500ms, and works from a GitHub runner in the
+  standalone diagnostic.
+- **Writes land even when replies do not.** A lost `undo-operation` was proven applied by the
+  guard that refused its retry.
+- **It is specific to POSTs against the action endpoints.** GETs through the same endpoints have
+  not failed once across hundreds of calls, and `POST /_agent-native/auth/login` has never failed
+  either — so "POST" alone does not describe it.
+- **`agent chat SSE` fails independently**, either with the same lost reply or with
+  `Cannot read properties of undefined (reading 'stream')`, which is a framework stack.
+
+What remains in the smoke is justified on its own terms regardless of cause: one retry for a lost
+reply, and `guardedCommand` asserting on the record rather than on whichever reply survived. Both
+are correct behaviour for a client that cannot assume a response arrives, and they are what made
+the mechanism visible in the first place.
+
+Resolution: the local hunt stops here. Continuing to iterate against a deployed environment, a
+cycle at a time, has passed the point where it produces knowledge. The next move is an upstream
+report carrying this evidence — the tail output, the timings, the five refutations — and a decision
+about whether a staging smoke should gate deploys while it runs across a path that loses replies.
+
+---
+
+## 2026-09-16 — Agent chat has never worked on a Worker, for two separate reasons
+
+Symptom, on deployed staging and under local `wrangler dev` alike: the agent chat stream opens
+and carries one error, `Cannot read properties of undefined (reading 'stream')`. The entry above
+guessed this was the same lost-reply mechanism. It was not; it is two framework bugs in series,
+and the evidence is in the built bundle rather than on the wire.
+
+1. `CLOUDFLARE_WORKER_STUB_MODULES` (core `dist/deploy/build.js`) maps `@anthropic-ai/sdk` to
+   `export default class Anthropic {}`. `anthropic-engine.ts` does
+   `(await import("@anthropic-ai/sdk")).default`, so `new Anthropic({ apiKey })` returns `{}`
+   and `client.messages.stream(...)` throws exactly that message. The bundle confirms it:
+   `this.messages = new API.Messages(this)` is absent, the `n.messages.stream(...)` call site
+   is not. Nothing warns — `/_agent-native/agent-engine/status` cheerfully reports
+   `{"configured":true,"engine":"anthropic","model":"claude-sonnet-5"}`.
+2. Selecting `ai-sdk:anthropic` instead is refused at runtime: `canResolvePackage()` gates it on
+   `require.resolve`, which cannot see inside a Worker bundle, and neither fallback covers
+   workerd — `AGENT_NATIVE_BUILD_ENGINE_PACKAGES` is injected only by the Netlify/Nitro deploy
+   build, and `isBundledServerlessRuntime()` matches Vercel/Netlify markers and `/var/task/`.
+
+So Cloudflare had no working Anthropic engine at all: the engine that is chosen cannot load, and
+the engine that can load is refused. Fixed by setting both `AGENT_ENGINE=ai-sdk:anthropic` and
+`AGENT_NATIVE_BUILD_ENGINE_PACKAGES=["ai","@ai-sdk/anthropic"]` in every `wrangler.jsonc` vars
+block, and in `.env.example` for the Node dev server and the evals. `tests/guards/agent-engine.test.mjs`
+holds it in place and fails when the framework stops stubbing the SDK, so the workaround is
+revisited at the next upgrade rather than outliving its cause (D03). Drafted upstream as
+`upstream-issues/anthropic-sdk-stubbed-on-workers.md`.
+
+Verified, not assumed: `pnpm smoke` against `wrangler dev` now reports `[ok] agent chat SSE`
+against the real API. It is the first green agent chat on a Worker in this repository.
+
+## 2026-09-16 — The lost POST reply reproduces locally, and depends on database state
+
+Chasing the above produced the thing five deploy cycles could not: a local reproduction of the
+lost-reply failure, on `127.0.0.1`, with no network, no Cloudflare edge and no GitHub runner
+anywhere in the path.
+
+```
+{"level":"info","event":"action","action":"create-job","outcome":"success","durationMs":2}
+   … and no `[wrangler:info] POST /_agent-native/actions/create-job` completion line at all
+```
+
+Twenty consecutive `create-job` POSTs: every one executed server-side in 2–6ms, not one reply
+reached `curl`. In the same window `GET` actions answered in 18ms, `POST /_agent-native/auth/login`
+in 63ms and `POST /mcp` in 14ms. A `create-job` carrying `{}` — refused before any write — hung
+too, so this is not the write path.
+
+Two theories raised and refuted immediately, both mine:
+
+- **Duplicate dev servers.** There were indeed two `wrangler dev` processes racing on 8787,
+  because `pkill -f "wrangler dev"` matches nothing: the command line reads `wrangler.js dev`.
+  Killed properly, verified a single listener, and the hang reproduced unchanged.
+- **The new `AGENT_NATIVE_BUILD_ENGINE_PACKAGES` var.** It was the only change between the last
+  green run and the first failing one. Removed it, restarted: still hung.
+
+What actually separates them is **database state**. `pnpm db:reset` + re-migrate + re-seed, same
+bundle, same vars, same everything else: twelve of twelve green, including the two write suites
+that had just failed. The preceding failures ran against a database carrying four earlier smoke
+runs and twenty-five probe jobs.
+
+This refutes the previous entry's conclusion, which located the fault "between the runner and the
+edge". It is in the Worker, it is reachable from a laptop, and it is a function of how much is in
+the database — not of geography, not of the network, and not of Cloudflare's wire. The threshold,
+and which table drives it, are not yet established; that is the next measurement, and it is now a
+local one that costs seconds instead of a deploy.
+
+---
+
+## 2026-09-16 — The lost action reply: what it is not, and the one line that describes it
+
+Measured, not inferred. Every count below is ten consecutive `curl` calls from a laptop in Oslo
+against deployed staging, each its own process and its own connection.
+
+```
+GET  /_agent-native/actions/list-jobs          answered=10  no-response=0
+POST /_agent-native/auth/login   (wrong pw)    answered=10  no-response=0
+POST /_agent-native/actions/no-such-action     answered=10  no-response=0   (404, no handler)
+POST /mcp                                      answered=10  no-response=0
+POST /_agent-native/actions/create-job  {}     answered=3   no-response=7   (400, writes nothing)
+POST /_agent-native/actions/create-job  valid  answered=8   no-response=2   (200)
+```
+
+**A POST that reaches a registered action handler intermittently never answers.** Nothing else
+does. The request body is fully sent — `upload completely sent off: 2 bytes` — and then not one
+byte comes back until the client gives up. A successful reply, when it arrives, is an ordinary
+`content-length: 478`: no chunking, no compression, nothing streamed.
+
+Refuted today, each by a direct measurement rather than an argument:
+
+| Theory | How it died |
+| --- | --- |
+| The GitHub runner, or the runner→Cloudflare path | Reproduces from a laptop, same smoke, same failures |
+| Node's `fetch` | `curl` loses replies at the same rate |
+| HTTP/2 | `--http1.1` loses them too (4/5 vs 1/5, and 3/5 on a repeat — noise, not a split) |
+| Database location or identity | A brand-new database in Europe behaves identically |
+| The write path | A request refused with 400 before any write hangs *more* often than a 200 |
+| Connection reuse | Every probe is a separate process and a separate connection |
+
+Two theories from earlier today also died, both mine:
+
+- **Duplicate dev servers.** There really were two `wrangler dev` processes on 8787 —
+  `pkill -f "wrangler dev"` matches nothing, because the command line reads `wrangler.js dev`.
+  Killed properly, verified one listener, and the local hang reproduced unchanged.
+- **Database state.** A reset-and-reseed appeared to fix it, so the entry above concluded the
+  failure was a function of accumulated rows. It is not: 120 consecutive `create-job` writes
+  (6-9ms each) and six consecutive full smoke runs against the same growing local database were
+  all green. The reset coincided with the recovery; it did not cause it. Recorded here because
+  that entry was wrong and is cited elsewhere.
+
+What stands: the fault is inside the Worker's action-invocation path, it is reachable from
+anywhere, and it is independent of what the action does. That is a narrow enough statement to
+carry to Cloudflare and to Builder.io, which is the next step rather than a seventh theory.
+
+---
+
+## 2026-09-16 — Found it: runtime DDL wedges an isolate, and the wedge is sticky
+
+The audit log was the difference. `AGENT_NATIVE_AUDIT_ENABLED=false` on staging,
+nothing else changed:
+
+```
+                      before   after
+POST complete-job {}   1/10    10/10
+POST archive-job  {}   0/10    10/10
+POST create-job   {}   3/10    10/10
+```
+
+and the deployment's write suite passed for the first time on staging. Successful
+commands then answer in a steady 0.21-0.29s, so the ordinary query path was never the
+problem.
+
+The mechanism, read out of `core/dist/audit/store.js` rather than guessed:
+`ensureAuditTables()` bootstraps the table on first use with one
+`CREATE TABLE IF NOT EXISTS`, ten `ALTER TABLE … ADD COLUMN` statements that are
+*expected* to throw on every boot after the first, and six `CREATE INDEX IF NOT
+EXISTS` — seventeen sequential round trips before an isolate's first mutating action
+can answer. Free against a local file; against remote D1 one of them intermittently
+never returns. And because the sequence is memoized as a single `_initPromise` that
+only resets `.catch`, a promise that never settles is awaited forever by every later
+request on that isolate. That is why it looked like one failure in three early and
+15 out of 15 an hour later: not randomness, one poisoned isolate.
+
+It also explains `agent-chat-d1-hang.md` — "the 8th D1 query never returns" is the
+8th of those seventeen — and why reads never failed: `resolveAuditAttach()` audits
+every mutating action and no read-only one, which is precisely the boundary measured.
+
+Fixed with `patches/@agent-native__core@0.176.5.patch` (pnpm patch, 76 lines), which
+bounds `execAnnotated` — the one funnel every statement passes through — with
+`AGENT_NATIVE_DB_STATEMENT_TIMEOUT_MS` (default 5000ms, 0 disables). A bounded
+rejection is all the call sites need: each `_initPromise` already resets on rejection,
+so it self-heals, and `recordActionAudit` swallows it exactly as its own "auditing
+must never break the audited action" comment intends. One seam rather than the twenty
+stores that repeat the pattern. `tests/guards/core-patch.test.mjs` fails when the
+version moves or the seam changes shape, so the patch is re-examined at every upgrade
+rather than carried silently (D03). Drafted upstream as
+`upstream-issues/runtime-ddl-wedges-d1-isolates.md`.
+
+Verified locally before deploying: twelve of twelve green with the patch in the
+bundle, agent chat included.
+
+---
+
+## 2026-09-16 — The first patch was wrong, twice, and the deploy said so
+
+`de5b155` shipped a statement deadline and it changed nothing on staging. Two defects,
+both mine, both instructive enough to keep:
+
+1. **It guarded nothing.** `getDbExec()` opens with `if (_exec) return _exec;`, so every
+   call after the first hands back the raw client and bypasses the internal funnel the
+   deadline was attached to. The bound has to be installed on the object callers
+   actually receive.
+2. **The replacement wedged the client outright.** A `Proxy` that rebound every function
+   property looked tidy and produced the exact production symptom on a local file
+   database: `create-job` logged `outcome success` and never answered. Replaced with two
+   assignments on the real object, which keeps its identity and everything else.
+
+Then the experiment that ended the approach. With the bound set to 1ms, `create-job`
+still hung — and the deadline never logged a firing. A rejection inside the audited path
+hangs the response just as thoroughly as a stall does, so converting stalls into
+rejections was never going to be the fix. Three `try/catch` layers do not help: they
+catch rejections, and what the request is stuck on is silence.
+
+What the evidence actually supports is what the diagnostic already proved — the request
+must not wait for the audit write. `wrapRunWithAudit` now schedules it and answers:
+
+```js
+void (async () => {
+    const { recordActionAudit } = await import("./audit/record.js");
+    await recordActionAudit(/* … */);
+})().catch(() => {});
+```
+
+Its own docstring already calls auditing best-effort and promises it "can never change
+an action's behavior"; waiting on a network write before answering is what broke that
+promise. The cost is audit rows cut short when an isolate is torn down. Verified locally:
+twelve of twelve green **and twelve audit rows written**, so the trail survives the
+normal path.
+
+The statement bound stays in the patch, now correctly installed, because the audit log is
+not the only runtime bootstrap that does this — `chat-threads/store.js` and
+`agent/run-store.js` repeat the pattern, and agent chat hangs on staging for what looks
+like the same reason. That half is a bound on a failure mode, not a proven fix, and this
+entry says so rather than implying the deploy validated it.
+
+---
+
+## 2026-09-16 — Detaching the audit write was too much; CI said so
+
+The detached version answered fast and broke the guarantee `wrapRunWithAudit` exists to
+provide. Two e2e tests assert the audit row is there the moment the action returns —
+`complete-job` ("the change is audited as a frontend call") and `parity` ("the UI and a
+direct HTTP call run the same action and differ only in caller") — and both failed.
+Correctly: the row was being written, just not yet.
+
+So the await stays and gains a ceiling instead. `Promise.race` against
+`AGENT_NATIVE_AUDIT_WAIT_MS` (default 1000ms, 0 detaches entirely). On a healthy path the
+recorder finishes in single-digit milliseconds and nothing observable changes — ordering
+intact, tests green. On a stalled bootstrap the reply is late by at most a second rather
+than never arriving.
+
+That is the whole fix: not "don't audit", not "audit in the background", but "the reply
+is not hostage to the audit". Verified locally — twelve of twelve smoke, **seventeen of
+seventeen e2e including the two that caught this**, and twelve audit rows written.
+
+Worth keeping in view: this is the third shape of the same patch in one afternoon. The
+first guarded nothing, the second wedged the client, the third answered fast and lost an
+ordering guarantee. Each was caught by something that runs — a deploy, a local smoke, CI —
+and none by reading the code and feeling confident.
+
+---
+
+## 2026-09-23/24 — The migration, and what the survey found
+
+T28 executed. The thing worth recording is not the work but a measurement taken before it: a
+survey of every file mentioning Cloudflare, Wrangler, D1 or the Worker, sorted by what it would
+actually cost.
+
+**The application was never the obstacle.** `src/infrastructure/d1/` was a *directory name*.
+Nothing under `src/` or `server/` imported a Cloudflare type, referenced `D1Database`, or
+touched `env.DB` — confirmed by search, not by memory. The 1,346 lines of repositories needed
+**one** change, `INSERT OR IGNORE` → `ON CONFLICT DO NOTHING`, because the framework's executor
+rewrites `?` placeholders for PostgreSQL itself and the 86 lines of SQLite DDL in `migrations/`
+are already the intersection both dialects accept.
+
+The cost was entirely in the deployment half: `scripts/bootstrap.mjs` (113 references) and its
+873-line guard, two deploy workflows, the e2e launcher, `bootstrap-org.mjs`, and eleven
+user-facing documents.
+
+Four things the platform taught us, each from a failure rather than a manual:
+
+| Failure | Cause | Now |
+| --- | --- | --- |
+| `Killed  pnpm install` | The default builder shares the application's instance and cannot install a thousand packages | A dedicated M build instance, set by bootstrap |
+| Build fails on `react-dom/client` | The platform installs `--prod` but builds on its own machine; the toolchain is in `devDependencies` | `CC_NODE_DEV_DEPENDENCIES=install` |
+| `too many connections for role` | The free `dev` plan allows five; the framework opens twenty, hardcoded | `xxs_sml` is the floor, and bootstrap refuses `dev` with the reason |
+| The app fell back to SQLite | Clever Cloud injects `POSTGRESQL_ADDON_URI`, not `DATABASE_URL` | `server/plugins/00-database-url.ts` maps it at boot |
+
+That last one also corrects something written here earlier: a web search claimed Clever Cloud
+injects `DATABASE_URL`. It does not. The claim was repeated into `T28` before being checked
+against a real linked add-on, which is the same mistake in a smaller package as the five refuted
+theories above it.
+
+**Two guarantees changed, and both are stated rather than glossed.** Promotion now proves a
+*commit* rather than bytes, because the platform builds from the git push. And application
+settings are *readable back* with `clever env`, where Worker secrets were not — so the Clever
+Cloud account is now inside the blast radius of a compromise in a way it was not before.
+`docs/runbook.md` says so in the secrets table rather than leaving it to be discovered.
+
+One thing deliberately not done: `app/root.tsx` still passes `sseUrl: false`. That existed
+because the Workers runtime cancelled a held-open response; an always-on process does not, so
+the event stream is available again for one line. Changing how every client receives updates
+deserves its own measurement, not a free ride on a migration.
+
+---
+
+## 2026-09-24 — Removing `AGENT_ENGINE` made `pnpm check` take 21 minutes
+
+`tests/guards/eval-json.test.mjs` went from 2 seconds to **910**, measured on its own. After the
+fix below it is 15, and `pnpm check` is 29 seconds end to end.
+
+One correction to my own first reading of this: I also recorded `pnpm check` at 21 minutes, then
+12, then 8, and treated each as the real number. They were not. Six `agent-native start`
+processes from earlier local test runs had been alive for **seven days**, and several of my own
+timing runs were overlapping each other — the machine was the variable, not the suite. Killing
+the orphans and measuring one thing at a time gave 29 seconds. The guard regression below is
+real and worth fixing; the check-suite figures were contention, and quoting them as a
+regression would have sent the next person hunting for a problem that was not there.
+
+Cause: deleting the `AGENT_ENGINE` workaround (correct, it was Cloudflare-only) removed a pin
+that was accidentally load-bearing. The guard strips every provider credential so that
+`resolveEngine` refuses before any request is made, and asserts the "No LLM provider is
+connected" error. With nothing pinned, `detectEngineFromEnv()` walks the whole registry and
+reaches `ai-sdk:ollama` — which needs no API key and therefore looks *available*. Every eval
+then waited out a connect timeout against a local Ollama that is not running.
+
+Pinning `AGENT_ENGINE=ai-sdk:anthropic` instead is not enough: with no key the AI-SDK engine
+retries against the real API and still costs about a minute per eval. 301 seconds, not 15.
+
+What works is narrowing the registry: `AGENT_BUILT_IN_ENGINES=anthropic` registers one engine,
+which needs a key, so `resolveEngine` refuses with nothing to attempt. 15 seconds, and the
+assertion the test exists for is unchanged.
+
+Two things to keep:
+
+- **A test that depends on provider *absence* is depending on the registry, not on the
+  environment.** Removing credentials is not the same as removing capability, and Ollama is the
+  engine that makes the difference visible.
+- The option is a **comma-separated list**, not the JSON array the framework's own metadata
+  documents (`doc: 'Built-in engines to register, e.g. ["ai-sdk:openai"]'`). Passing that
+  spelling is read as a single engine name and refused with `names unknown built-in engine(s):
+  ["anthropic"]`. Worth an upstream note.
+
+---
+
+## 2026-09-24 — Deleting two gitignore lines committed a secrets file
+
+`.dev.vars` and nineteen `.wrangler/state` SQLite files reached a public repository, in
+`f6bfb51` and `5caf46d`, and were pushed.
+
+Both gitignore removals were individually correct. `.dev.vars` was Wrangler's secrets file and
+nothing reads it any more; `.wrangler/` was replaced by `.e2e/`. What was missing is the step
+between them: **a machine that ran the Cloudflare version still has both directories on disk**,
+so removing the ignore rules made them trackable, and a habitual `git add -A` committed them.
+The file held a real `BETTER_AUTH_SECRET` and `SEED_PASSWORD`.
+
+The rule this repository now follows: **removing a gitignore entry is a two-step change.** Check
+what becomes trackable before committing — `git status --short` immediately after editing
+`.gitignore`, not after staging. The entries are restored with a comment saying why they outlive
+the tool that needed them.
+
+The maintainer's call was to rotate later, the data being synthetic and the account
+non-critical. Recorded because the mechanism is general and would repeat: every template
+instantiation that migrates carries the same two stale directories.
+
+---
+
+## 2026-09-24 — A platform migration inverts a startup rule, and staging cannot catch it
+
+`validateEnvironment` refused to start production when `DATABASE_URL` was set:
+
+```
+DATABASE_URL must not be set in production; the Worker reaches D1 through its binding
+```
+
+That rule was right on Cloudflare, where production reached D1 through a binding and a
+connection string meant somebody had pointed production somewhere by hand. After T28 it is
+exactly backwards: production reaches a managed PostgreSQL add-on *through* the connection
+string, which `server/plugins/00-database-url.ts` maps from `POSTGRESQL_ADDON_URI` before
+`00-env-check` runs. The first production promotion would have thrown at boot.
+
+Two reasons it survived the migration:
+
+- **`validateEnvironment` has no `staging` rule set**, so the deployed staging application never
+  evaluated the branch. Every smoke run was green while the production path was broken. A rule
+  that only one environment exercises is only tested by deploying that environment.
+- **Three unit tests asserted the old behaviour** and passed, because they were written against
+  the rule rather than against the intent. `production forbids DATABASE_URL when present at all`
+  is a test that cannot survive its premise changing — it names the mechanism, not the goal.
+
+The rule now requires `DATABASE_URL` in production and refuses a `file:` URL there, the case that
+would put production on a SQLite file inside a container replaced on every deploy.
+
+What generalises: **a migration's grep must cover assertions, not only call sites.** The stale
+Cloudflare references that mattered were not the ones naming `wrangler` — those were obvious —
+but the one encoding a platform assumption as a production-only invariant, in a validator whose
+own tests agreed with it.
+
+---
+
+## 2026-09-24 — A build artifact that is a dotfile uploads as nothing, and the job stays green
+
+The e2e job failed on both repositories with `Artifact not found for name: server-build`,
+while the `verify` job that produces it passed.
+
+`verify` builds once and hands `.output/` to `e2e` (D21). `.output` begins with a dot, and
+`actions/upload-artifact@v4` excludes hidden paths unless `include-hidden-files: true`. Its
+default for a path that matches nothing is `if-no-files-found: warn`, so the step printed
+
+```
+##[warning]No files were found with the provided path: .output/. No artifacts will be uploaded.
+```
+
+and **exited zero**. The producing job was green, the branch looked green until the dependent
+job ran, and the error surfaced one job later pointing at the consumer rather than the cause.
+
+This arrived with T28 and could not have arrived before it: the Cloudflare artifact was
+`dist/worker.js`, which is not hidden. Renaming the thing being built changed whether the
+default applied.
+
+Two things worth keeping:
+
+- **`if-no-files-found: warn` turns a missing build into a passing step.** Anywhere the
+  artifact is load-bearing — and it is, because nothing rebuilds it downstream — the setting
+  should be `error`, so the failure lands on the job that caused it.
+- A platform migration changes paths, and **a path's leading character can be semantic**. Not
+  something a grep for `wrangler` would ever surface.
+
+---
+
+## 2026-09-24 — bootstrap's second run tried to recreate what its first run made
+
+Two faults in `scripts/bootstrap.mjs`, surfaced by the first real `--yes` run against
+`seating-arrangement`. Both were in code whose own tests passed.
+
+**1. `github-secrets` could not read a logged-in CLI's profile.** clever-tools 5.x writes
+`{ version, profiles: [{ alias, token, secret, expirationDate }] }`; the script read a
+top-level `token`. It refused with *"Run `clever login` first"* — at a CLI whose preflight had
+just reported `[ok] Clever Cloud authentication`. The message named the wrong cause, so the
+maintainer did the reasonable thing it suggested, which fixed nothing.
+
+**2. The re-run tried to create applications that existed.** `listApps()` called
+`clever applications --format json`. That subcommand takes `--json`; `addon list` and `env`
+take `--format json`. And `clever` **exits 0** on an unknown option, printing its usage text
+to stdout. So the exit-status check passed, `JSON.parse` threw, the `catch` returned `[]`, and
+"I could not tell" became "there are none" — in the one function whose answer decides whether
+to create a paid resource. `clever create` then refused on the alias, which is the only reason
+it did not make duplicates.
+
+Why the tests did not catch either: **the stub agreed with the script.** It answered every
+`applications` call with the same flat array regardless of flags, and its profile fixture used
+the old flat shape. The idempotency test — `a second --yes run against an existing world
+creates nothing` — existed and passed, because the stub could not be asked the wrong question.
+A stub that mirrors the caller's assumptions tests the caller against itself.
+
+Now:
+
+- `cleverJson()` refuses when a command that should print JSON does not, so a wrong flag is a
+  loud failure instead of an empty list.
+- `listApps()` reads the account-wide `applications list`, not the checkout's links — a fresh
+  clone has none, and would otherwise try to create everything again. An application that
+  exists but is not linked here is linked, since every later step addresses it by alias.
+- The profile reader takes both shapes, prefers `CLEVER_PROFILE` then `default`, and refuses an
+  expired profile rather than writing a dead token into the CI secrets.
+- The stub reproduces the real CLI's per-subcommand flags **and its exit-0-on-unknown-option
+  behaviour**, and its default profile is the current shape. The old shape and the expired case
+  each have a test.
+
+The same lesson as the env-check rule earlier today, from the other side: there, a test encoded
+the old platform; here, a test double encoded the caller's belief about a tool.
+
+---
+
+## 2026-09-25 — The add-on resolver read clever-tools 4.x output only
+
+`bootstrap-org` refused with `add-on "seating-arrangement-staging-db" reported no
+POSTGRESQL_ADDON_URI` against an add-on that had one. `clever addon env <id> --format json`
+printed a list of `{ name, value }` pairs in 4.x and prints one object keyed by variable name in
+5.x; `scripts/lib/addon-url.mjs` read only the list.
+
+The same resolver is how `scripts/migrate.mjs --addon` and `scripts/seed.mjs --addon` reach a
+deployed database, so the staging deploy workflow's migration step would have failed the same
+way on the first merge to `main`. It was found by a hand-run script rather than by that
+workflow only because the maintainer happened to need an organization first.
+
+Third clever-tools 5.x shape change in two days, after the profile file and the
+`applications` flag. The parser is now `connectionStringFrom()`, which reads both shapes, and
+`tests/guards/addon-url.test.mjs` pins both with the current one first. No test covered this
+function before; its only exercise was a real deployment.

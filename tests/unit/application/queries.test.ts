@@ -229,7 +229,7 @@ describe("listJobs", () => {
   // in-memory one; see DISCREPANCIES, 2026-09-06 T08), and the case below
   // pins that.
 
-  it("returns jobs in scheduled order, like the D1 repository", async () => {
+  it("returns jobs in scheduled order, like the SQL repository", async () => {
     const deps = seeded();
     const jobs = await listJobs(deps, acmeOwner, { includeArchived: true });
     expect(jobs.map((job) => job.id)).toEqual([
