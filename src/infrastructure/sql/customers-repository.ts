@@ -1,5 +1,5 @@
 /**
- * `CustomerRepository` against D1 / SQLite (blueprint B7, B11).
+ * `CustomerRepository` against PostgreSQL / SQLite (blueprint B7, B11).
  *
  * Mirrors `tests/fixtures/in-memory.ts` exactly, because every use-case test
  * runs against that one and every integration test against this one: reads are
@@ -8,7 +8,7 @@
  *
  * Nothing here knows which database it is talking to. `runAtomic` picks
  * `atomicBatch` or `transaction`, and the preconditions travel inside the SQL
- * (D07) because D1 cannot hold a transaction open across a check.
+ * (D07) rather than in application code between two statements.
  */
 
 import { AppError } from "../../application/errors";

@@ -5,8 +5,8 @@
  *
  * - The customer must exist, belong to this organization and still be active.
  *   That is enforced inside the repository's atomic write (B11), because a
- *   check here followed by a write there is a race: D1 cannot hold a
- *   transaction open across the two. The repository reports it as
+ *   check here followed by a write there is a race that no dialect closes for
+ *   us, so the guard travels inside the statement (D07). The repository reports it as
  *   `NOT_FOUND "Customer not found or archived"`.
  * - The job's `assignedTo`, when given, must be a member of the organization.
  *   That one *is* checked here, through `MembershipReader`: membership lives in

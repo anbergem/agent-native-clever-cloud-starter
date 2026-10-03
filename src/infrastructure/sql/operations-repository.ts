@@ -1,5 +1,5 @@
 /**
- * `OperationRepository` against D1 / SQLite (blueprint B7, B9, B11).
+ * `OperationRepository` against PostgreSQL / SQLite (blueprint B7, B9, B11).
  *
  * Read-only: operation rows are written by `customers-repository.ts` and
  * `jobs-repository.ts`, inside the same atomic batch as the change they

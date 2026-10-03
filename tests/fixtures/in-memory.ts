@@ -1,7 +1,7 @@
 /**
  * In-memory implementation of `Dependencies` (blueprint B7, B11).
  *
- * Every use-case test builds one of these instead of touching D1: the
+ * Every use-case test builds one of these instead of touching a database: the
  * behaviour mirrors the real repositories closely enough that a use case
  * cannot tell the difference — `getById`/`list` filter by `orgId`, job
  * creation requires an active customer in the same org, `commit` is
@@ -12,8 +12,8 @@
  * can seed or inspect it without going through the repository interfaces,
  * which run the same preconditions a real adapter would.
  *
- * Every `list` returns rows in the order the matching D1 statement in
- * `src/infrastructure/d1/sql.ts` does — customers by `name, id`, jobs by
+ * Every `list` returns rows in the order the matching statement in
+ * `src/infrastructure/sql/sql.ts` does — customers by `name, id`, jobs by
  * `scheduled_at, id`, operations by `performed_at DESC, id DESC`. A `Map`
  * iterates in insertion order, which is not an order any database promises,
  * so without this a unit test and the integration test for the same use case
@@ -213,7 +213,7 @@ function createJobRepository(state: InMemoryState): JobRepository {
             filter.customerId ? j.customerId === filter.customerId : true,
           )
           // Half-open window, the same as `SELECT_JOBS_PARTS` in
-          // `src/infrastructure/d1/sql.ts`: `from` inclusive, `to` exclusive.
+          // `src/infrastructure/sql/sql.ts`: `from` inclusive, `to` exclusive.
           .filter((j) => (filter.from ? j.scheduledAt >= filter.from : true))
           .filter((j) => (filter.to ? j.scheduledAt < filter.to : true))
           // `SELECT_JOBS_PARTS.order`: ORDER BY scheduled_at ASC, id ASC.

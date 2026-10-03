@@ -3,7 +3,7 @@ import { parseArgs } from "node:util";
 
 import { CookieClient, detail } from "./lib/http-client.mjs";
 
-const USAGE = `usage: node scripts/worker-smoke.mjs --base-url <url> --mode local|staging|production
+const USAGE = `usage: node scripts/smoke.mjs --base-url <url> --mode local|staging|production
        [--qa-email <email> --qa-password <password> --expect-org-id <id>]
        [--run-id <id>] [--timeout-ms <milliseconds>]
 
@@ -57,6 +57,12 @@ const assert = (condition, message) => {
   if (!condition) throw new Error(message);
 };
 
+// Both spellings on purpose. The hyphenated names are the AI SDK's; the underscored
+// ones are what this framework's agent-chat route actually emits, and a real run reaches
+// `tool_input_start` — the model choosing a tool — long before it reaches any text.
+// Without them a working agent looks like silence: the first two kilobytes of a healthy
+// stream are a keepalive, two `activity` lines, `model_stream`, empty `thinking`, and
+// then tool-input deltas (T28).
 const MEANINGFUL_SSE_TYPES = new Set([
   "text",
   "text-delta",
@@ -64,9 +70,12 @@ const MEANINGFUL_SSE_TYPES = new Set([
   "tool-result",
   "finish",
   "message",
+  "tool_input_start",
+  "tool_call",
+  "tool_result",
 ]);
 
-export async function readSseEvidence(response, maxBytes = 2048) {
+export async function readSseEvidence(response, maxBytes = 8192) {
   const reader = response.body?.getReader();
   if (!reader) return { text: "", events: [], evidence: undefined };
   const decoder = new TextDecoder();
@@ -155,17 +164,80 @@ export async function runSmoke(
       );
     }
   };
+  // One retry, and only when a request produced no response at all.
+  //
+  // Against a deployed Worker a POST occasionally never returns, while the
+  // Worker's own trace shows the action completing normally —
+  // `create-job … outcome ok, durationMs 214` — with no exception logged, and a
+  // repeat of the same call succeeding in about three seconds. Whatever loses
+  // the response sits between the runner and the edge, not in the application,
+  // and a smoke that fails on it reports a defect that does not exist
+  // (DISCREPANCIES.md, 2026-09-15).
+  //
+  // Retrying a command is safe here by design rather than by luck: creates
+  // carry an idempotency key and replay to the same resource, and every other
+  // command is guarded on `expectedVersion`, so a duplicate delivery is refused
+  // rather than applied twice (B11). A retry that reaches a Worker which did
+  // process the first attempt therefore still asserts the truth.
   const action = async (name, body, expected = 200, activeClient = client) => {
-    const result = await activeClient.json(`/_agent-native/actions/${name}`, {
-      method: "POST",
-      body,
-      signal: deadline,
-    });
+    let result;
+    try {
+      result = await activeClient.json(`/_agent-native/actions/${name}`, {
+        method: "POST",
+        body,
+        signal: deadline,
+      });
+    } catch (error) {
+      if (deadline.aborted) throw error;
+      log(`[retry] ${name}: no response (${detail(error?.message ?? error)})`);
+      result = await activeClient.json(`/_agent-native/actions/${name}`, {
+        method: "POST",
+        body,
+        signal: deadline,
+      });
+    }
     assert(
       result.response.status === expected,
       `HTTP ${result.response.status}: ${detail(result.body)}`,
     );
     return result.body;
+  };
+
+  /**
+   * A version-guarded command whose reply may not survive the trip.
+   *
+   * A lost response is not a lost write: the request reaches the Worker and
+   * applies, and the retry then meets B11's guard — `Already undone`, or
+   * `The job was changed by someone else` — which is the system working, not
+   * failing. Both were observed on staging, one run apart
+   * (DISCREPANCIES.md, 2026-09-15). So trust the record: re-read the job, and
+   * recover the operation id from the activity feed, because the caller needs
+   * it to undo what it just did.
+   */
+  const guardedCommand = async (name, body, jobId) => {
+    try {
+      return await action(name, body);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!message.includes("HTTP 409")) throw error;
+      log(
+        `[recovered] ${name}: a lost response had already applied; reading the record back`,
+      );
+      const job = await client.json(
+        `/_agent-native/actions/get-job?jobId=${encodeURIComponent(jobId)}`,
+        { signal: deadline },
+      );
+      const activity = await client.json(
+        "/_agent-native/actions/list-recent-activity",
+        { signal: deadline },
+      );
+      const operation = Array.isArray(activity.body)
+        ? activity.body.find(
+            (entry) => entry.resourceId === jobId && entry.action === name,
+          )
+        : undefined;
+      return { resource: job.body, operationId: operation?.id };
+    }
   };
 
   await check("ping", async () => {
@@ -185,14 +257,18 @@ export async function runSmoke(
     }
     throw new Error(last);
   });
-  await check("health uses D1", async () => {
+  // Local runs a SQLite file and deployments run PostgreSQL, and the point of the check is
+  // that the app reached a real database rather than a default it invented — so it asserts
+  // the dialect the mode actually implies rather than one spelling everywhere (T28).
+  const expectedDialect = options.mode === "local" ? "sqlite" : "postgres";
+  await check(`health uses ${expectedDialect}`, async () => {
     const { response, body } = await client.json("/_agent-native/health", {
       signal: deadline,
     });
     assert(
       response.status === 200 &&
         body?.db === true &&
-        body?.database?.dialect === "d1",
+        body?.database?.dialect === expectedDialect,
       `HTTP ${response.status}: ${detail(body)}`,
     );
   });
@@ -283,10 +359,11 @@ export async function runSmoke(
         created?.resource?.version === 1 && created?.operationId,
         `create: ${detail(created)}`,
       );
-      const completed = await action("complete-job", {
-        jobId: created.resource.id,
-        expectedVersion: 1,
-      });
+      const completed = await guardedCommand(
+        "complete-job",
+        { jobId: created.resource.id, expectedVersion: 1 },
+        created.resource.id,
+      );
       assert(
         completed?.resource?.status === "completed",
         `complete: ${detail(completed)}`,
@@ -296,9 +373,11 @@ export async function runSmoke(
         { jobId: created.resource.id, expectedVersion: 1 },
         409,
       );
-      const undone = await action("undo-operation", {
-        operationId: completed.operationId,
-      });
+      const undone = await guardedCommand(
+        "undo-operation",
+        { operationId: completed.operationId },
+        created.resource.id,
+      );
       assert(
         undone?.resource?.status === "scheduled",
         `undo: ${detail(undone)}`,
@@ -483,9 +562,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     }
     process.exitCode = await runSmoke(options);
   } catch (error) {
-    console.error(
-      `worker-smoke: ${error instanceof Error ? error.message : error}`,
-    );
+    console.error(`smoke: ${error instanceof Error ? error.message : error}`);
     process.exitCode = 1;
   }
 }

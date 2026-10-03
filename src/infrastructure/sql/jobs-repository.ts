@@ -1,5 +1,5 @@
 /**
- * `JobRepository` against D1 / SQLite (blueprint B7, B11).
+ * `JobRepository` against PostgreSQL / SQLite (blueprint B7, B11).
  *
  * The same shape as `customers-repository.ts`, with one extra rule: a job may
  * only be created for a customer that exists, is active, and belongs to the

@@ -29,11 +29,11 @@ import {
   type ResourceType,
 } from "../../src/domain";
 import { getDependencies } from "../../src/infrastructure/container";
-import { createCustomersRepository } from "../../src/infrastructure/d1/customers-repository";
-import { createIdempotencyStore } from "../../src/infrastructure/d1/idempotency-store";
-import { createJobsRepository } from "../../src/infrastructure/d1/jobs-repository";
-import { createMembershipReader } from "../../src/infrastructure/d1/membership-reader";
-import { createOperationsRepository } from "../../src/infrastructure/d1/operations-repository";
+import { createCustomersRepository } from "../../src/infrastructure/sql/customers-repository";
+import { createIdempotencyStore } from "../../src/infrastructure/sql/idempotency-store";
+import { createJobsRepository } from "../../src/infrastructure/sql/jobs-repository";
+import { createMembershipReader } from "../../src/infrastructure/sql/membership-reader";
+import { createOperationsRepository } from "../../src/infrastructure/sql/operations-repository";
 import {
   MEMBER1_EMAIL,
   ORG_ACME_ID,

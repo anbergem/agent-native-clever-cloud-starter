@@ -180,16 +180,16 @@ something else changed the job in between.
 `assignedTo` already exists as a column, so this feature needs no migration. If it did:
 
 ```bash
-pnpm exec wrangler d1 migrations create <app>-local "job assignee history"
+$EDITOR migrations/0003_job_assignee_history.sql   # named after the highest existing number
 # writes migrations/0003_job_assignee_history.sql
 ```
 
 Write the SQL, mirror the column in `server/db/schema.ts`, apply it locally with
-`pnpm db:migrate` (Node file) and `pnpm db:migrate:worker` (local D1), and add a value for it
+`pnpm db:migrate`, and add a value for it
 to `tests/fixtures/scenario.ts` if it is NOT NULL. Never edit a migration that has been
 applied anywhere. `docs/database-and-migrations.md` has the rest.
 
-What this feature does need is the repository write. `src/infrastructure/d1/sql.ts` already has
+What this feature does need is the repository write. `src/infrastructure/sql/sql.ts` already has
 `UPDATE_JOB`, which sets `assigned_to` among the other columns, so nothing changes — but check.
 If you add a statement, it must contain `org_id = ?`, or
 `tests/unit/infrastructure/sql-scoping.test.ts` fails.
@@ -295,7 +295,6 @@ Evals need a provider key and are release evidence, not a pull-request gate.
 ```bash
 pnpm check
 pnpm test:integration
-pnpm verify:worker
 pnpm test:e2e:full
 ```
 
