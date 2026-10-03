@@ -3010,3 +3010,54 @@ label. A rule requiring the label can never be satisfied. The guard test asserte
 bootstrap sends, which agreed with the constant; nothing compared the constant with a real
 check run's name. The constant is now `["verify", "e2e"]`. This repository's `main` was never
 protected, because its bootstrap has not been run, so nothing here needed correcting by hand.
+
+---
+
+## 2026-10-03 — What framework 0.176.5 → 0.198.2 changed underneath this application
+
+Found by running every suite after the bump, in the order they surfaced. Each was a framework
+change shipped as a minor version; none was in a release note under a heading that said so.
+
+1. **SQLite is gone (0.177).** `DATABASE_URL must be a PostgreSQL URL or a pglite: URL.` Local
+   development, both test harnesses, the seed, the reset and an env-check rule assumed a SQLite
+   file. See D30.
+2. **Production builds refuse PGlite.** `This deployed server has no hosted database: it
+   resolved to local PGlite.` A built server counts as deployed (`AGENT_NATIVE_BUILD_PRODUCTION_SERVER`
+   is inlined at build time); only platform emulators and an embedding host may opt out. The
+   browser suite tests the build, so it got a real PostgreSQL rather than misuse the embedding
+   flag.
+3. **PGlite holds its directory for one process, and keeps the event loop alive after
+   `close()`.** A finished seed hung for ten minutes holding the lock the next step needed; the
+   scripts that use it now exit explicitly.
+4. **Health stopped reporting `database.dialect`** and reports a `postgres:` fingerprint. The
+   deploy workflows' smoke asserted on `dialect`; the first deploy would have failed it.
+5. **Chat refuses before streaming when no provider is ready (0.193).** A 403 where 0.176
+   streamed a `missing_credentials` event. The local smoke, which runs without a key by design,
+   accepts either; deployed modes must still stream.
+6. **The settings, team and chat screens moved to `@agent-native/toolkit` (0.198)**, which
+   carries its own strings. The import codemod moves the imports and not the catalog, so the
+   screens rendered raw keys ("Search placeholder", "App fallback name").
+   `createToolkitI18nCatalog` would merge them but builds loaders only for built-in locales and
+   would have dropped nb-NO, so the merge is done in `app/i18n/index.ts`.
+7. **Settings became the framework's (0.197).** The app's own settings page stopped rendering;
+   `/team` redirected to a settings page id that no longer exists, which the framework sends to
+   Profile — leaving someone without an organization nowhere to accept an invitation, in an
+   app where that is the only way in. `/team` now renders the team page itself. The new
+   Authentication page offered email-domain auto-join, which the server refuses with 403.
+8. **The redesigned sign-in page loads Google Fonts whenever `marketing` is set (0.192)**, which
+   the environment label needs. Caught by the browser suite's same-origin assertion. Stripped
+   by wrapping `nitroApp.fetch`: an earlier version kept an h3 middleware first by moving it on
+   every request, and moving entries in a list in-flight requests iterate stalled some of them.
+9. **Removing a member requires a successor and an identity policy for every email-shaped
+   column (0.181).** Without `registerIdentityColumns()` the removal answered 503, "local
+   cleanup is pending" — owners could not remove anyone. `server/plugins/db.ts` declares
+   `customers.email` (a customer's address: never touched), and `created_by` on customers and
+   jobs (attribution: follows an email change, stays when the person leaves).
+10. **A test that passed by file order.** `listRecent(org, 10)` missed its row once a
+    single-worker run put another file's real-clock rows ahead of it. Not a dialect difference
+    — the collation is byte order in both.
+
+Also: five of my own test servers from earlier runs were still alive, wedged and ignoring
+SIGTERM, and one launcher kept restarting servers. They made the full browser run stall
+intermittently while each spec passed alone. Check `pgrep -fl 'node .output/server/index.mjs'`
+before believing a flaky run.

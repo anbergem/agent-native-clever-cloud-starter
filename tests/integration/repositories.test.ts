@@ -227,12 +227,15 @@ describe("organization scoping", () => {
       inverse: null,
     });
 
-    const recent = await operations.listRecent(ORG_ACME_ID, 10);
+    // A limit no test database reaches: other files write operations with the
+    // real clock, which outrank the scenario's fixed timestamps, so a top-10
+    // check passed or failed depending on which file ran first.
+    const recent = await operations.listRecent(ORG_ACME_ID, 1000);
     expect(recent.map((operation) => operation.resourceId)).toContain(
       acmeJob.id,
     );
     expect(
-      (await operations.listRecent(ORG_OTHER_ID, 10)).map(
+      (await operations.listRecent(ORG_OTHER_ID, 1000)).map(
         (operation) => operation.resourceId,
       ),
     ).toContain(otherCustomer.id);

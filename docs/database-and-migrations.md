@@ -36,7 +36,7 @@ touches the database**. Not at deploy time. Not from a file in this repository.
 | `accounting_exports` | The durable pending request for the external integration |
 
 `AGENT_NATIVE_SKIP_ENSURE_TABLES` is never set: CI exercises the framework's bootstrap on every
-run by booting the built server against a fresh, empty SQLite file.
+run by booting the built server against a fresh, empty PostgreSQL database.
 
 Three consequences you will meet in practice.
 
@@ -78,19 +78,21 @@ migrations/0001_init.sql
 migrations/0002_job_accounting.sql
         │
         └── scripts/migrate.mjs   →  whatever DATABASE_URL names
-                                     file:./data/app.db  or  postgresql://…
+                                     postgresql://…  (local, CI or the add-on)
+                                     or pglite:…      (integration tests, evals)
 ```
 
 Same files, same order, every environment, one runner. It goes through the framework's own
 executor rather than a driver of its own, which is what makes one runner possible: the executor
-resolves SQLite or PostgreSQL from the URL, and on PostgreSQL rewrites `?` placeholders to
-`$n` through a real parser. The bookkeeping table is still called `d1_migrations` and still
+reaches PostgreSQL or PGlite (PostgreSQL compiled to run in-process) from the URL, and
+rewrites `?` placeholders to `$n` through a real parser. The framework has been PostgreSQL-only
+since 0.177; SQLite `file:` URLs are refused. The bookkeeping table is still called `d1_migrations` and still
 holds the bare file name, so `/api/ready` asks one question of every runtime; renaming it would
 be a migration of its own for no gain.
 
-The 86 lines of SQL in `migrations/` applied to a real PostgreSQL instance unmodified. That is
-not luck — `TEXT`, `INTEGER`, ISO-string timestamps, `length()` checks and composite foreign
-keys are the intersection both dialects accept.
+The SQL in `migrations/` was written when SQLite was the local database, so it sticks to
+`TEXT`, `INTEGER`, ISO-string timestamps, `length()` checks and composite foreign keys. That
+still runs; nothing new needs to stay SQLite-compatible.
 
 ## Commands per environment
 
@@ -101,8 +103,9 @@ keys are the intersection both dialects accept.
 | Staging | the deploy workflow | the deploy workflow, QA org only |
 | Production | the promotion workflow | **never** |
 
-`pnpm db:reset` deletes `data/app.db*` and migrates again. It refuses to run when
-`DATABASE_URL` is not a local file, because it deletes.
+`pnpm db:reset` drops the local database and migrates again. It refuses anything that is not
+on this machine — a hosted URL, or a PGlite directory outside `data/` — because it deletes.
+The `db:*` scripts read `.env` the way `pnpm dev` does, so they act on the same database.
 
 A deployed database is reached with `--addon`, which resolves the connection string through the
 Clever Cloud CLI in-process so it never appears in a log or a command line:
@@ -119,8 +122,8 @@ Inspecting a database:
 ```bash
 clever addon list                    # find the add-on
 # then use any PostgreSQL client with the connection string from the console,
-# or for the local file:
-sqlite3 data/app.db "SELECT name FROM d1_migrations ORDER BY name"
+# or for the local database:
+psql postgres://localhost:5432/example-jobs-dev -c "SELECT name FROM d1_migrations ORDER BY name"
 ```
 
 ## Writing a migration
@@ -149,8 +152,7 @@ Rules:
 - **Keep the constraints in SQL.** `migrations/0001_init.sql` carries `CHECK` constraints for
   the status enums and the length limits the domain also enforces. Belt and braces: the domain
   is the readable rule, the constraint is the one a bad migration or a hand-typed `UPDATE`
-  cannot get around. PostgreSQL enforces foreign keys always; the SQLite runner turns
-  `PRAGMA foreign_keys` on.
+  cannot get around. PostgreSQL enforces foreign keys always.
 
 ## Expand and contract
 
