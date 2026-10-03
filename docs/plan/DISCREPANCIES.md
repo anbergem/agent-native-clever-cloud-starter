@@ -2998,3 +2998,15 @@ Third clever-tools 5.x shape change in two days, after the profile file and the
 `applications` flag. The parser is now `connectionStringFrom()`, which reads both shapes, and
 `tests/guards/addon-url.test.mjs` pins both with the current one first. No test covered this
 function before; its only exercise was a real deployment.
+
+---
+
+## 2026-10-03 — Branch protection required a check name that no check ever reports
+
+Found in `seating-arrangement`, where it blocked every pull request to `main` with every check
+green. `scripts/bootstrap.mjs` required `CI / verify` and `CI / e2e`; GitHub Actions reports
+check runs under the **job** name — `verify`, `e2e` — and "CI / verify" is only the web page's
+label. A rule requiring the label can never be satisfied. The guard test asserted the body
+bootstrap sends, which agreed with the constant; nothing compared the constant with a real
+check run's name. The constant is now `["verify", "e2e"]`. This repository's `main` was never
+protected, because its bootstrap has not been run, so nothing here needed correcting by hand.
