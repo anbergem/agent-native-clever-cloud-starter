@@ -354,3 +354,35 @@ and guarded so an upgrade has to look at it. What is promoted is now a commit ra
 bundle, which is a narrower guarantee, stated as such in `ARCHITECTURE.md` section 11.
 `docs/plan/tasks/T28-clever-cloud-migration.md` is the worked plan;
 `docs/plan/upstream-issues/` holds the three reports owed to Builder.io.
+
+## D30 — Framework 0.198, PostgreSQL in every environment (2026-10-03)
+
+Revises D05 (one runner, two dialects) and D29's local database.
+
+Context: from 0.177 the framework is PostgreSQL-only — `createDbExec` refuses a SQLite `file:`
+URL — and from 0.177 its production builds refuse PGlite, the in-process PostgreSQL it uses for
+local development, unless an embedding host claims it. The browser suite runs the production
+build, deliberately, so it cannot use PGlite.
+
+Decision, chosen by the maintainer from three options:
+
+- **Local development and the browser suite run a real PostgreSQL on the developer's machine**
+  (Homebrew `postgresql@18`, the add-on's major version, databases created with the add-on's
+  `en_GB.UTF-8` collation). CI's browser job gets a `postgres:18` service container.
+- **The integration suite and the evals run PGlite**: they start no server, need nothing
+  installed, and run each step to completion, which PGlite's one-process-per-directory lock
+  requires.
+- Nothing runs on SQLite any more. Every test now runs on PostgreSQL semantics, which closes
+  the gap that let two PostgreSQL-only bugs reach staging (DISCREPANCIES.md, 2026-09-25).
+
+The 0.176.5 framework patch is retired: 0.198 bounds every statement and probes the audit table
+before changing it, the two facts the patch existed for. `tests/guards/framework-bounds.test.mjs`
+watches them.
+
+Product changes the upgrade forced, decided by the maintainer:
+
+- **Settings** is now the framework's own, and shows only the pages this app uses
+  (`app/components/settings-pages.tsx`); Organization › Authentication drops email-domain
+  auto-join and the A2A shared secret, which this app cannot honour.
+- **The sign-in page's Google Fonts links are stripped** (`server/third-party-fonts.ts`), keeping
+  the app name and environment label without sending visitors' IP addresses to Google (D17).
