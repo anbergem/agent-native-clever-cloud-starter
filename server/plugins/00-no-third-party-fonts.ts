@@ -4,6 +4,9 @@ import { hasThirdPartyFonts, stripThirdPartyFonts } from "../third-party-fonts";
 
 type Fetch = (request: Request) => Response | Promise<Response>;
 
+/** Where the framework serves its sign-in page: the entry path and its legacy spelling. */
+const SIGN_IN_PATHS = new Set(["/sign-in", "/_agent-native/sign-in"]);
+
 /**
  * Keep the framework's sign-in page from loading Google Fonts (see `../third-party-fonts.ts`).
  *
@@ -14,9 +17,12 @@ type Fetch = (request: Request) => Response | Promise<Response>;
  * framework's middleware list by moving it there on each request; moving entries in a list
  * that in-flight requests were iterating stalled some of them.
  *
- * Only a GET answered with HTML is read, and only a page that actually carries a Google
- * Fonts link is rewritten. The browser suite's same-origin assertion is what fails if a
- * framework upgrade loads the fonts some other way.
+ * Only the sign-in page is read. Reading a response means waiting for all of it, and an
+ * earlier version read every HTML page: a server-rendered page whose stream stays open then
+ * never reached the browser at all, which showed up as navigations that hung until the
+ * test run timed out. Every other response is returned exactly as it came, still streaming.
+ * The browser suite's same-origin assertion is what fails if a framework upgrade loads the
+ * fonts from some other page.
  */
 export default defineNitroPlugin((nitroApp) => {
   const app = nitroApp as { fetch?: Fetch };
@@ -29,6 +35,7 @@ export default defineNitroPlugin((nitroApp) => {
   app.fetch = async (request) => {
     const response = await original(request);
     if (request.method !== "GET") return response;
+    if (!SIGN_IN_PATHS.has(new URL(request.url).pathname)) return response;
     if (!response.headers.get("content-type")?.includes("text/html")) {
       return response;
     }
