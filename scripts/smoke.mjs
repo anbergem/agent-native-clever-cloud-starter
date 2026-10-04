@@ -128,9 +128,9 @@ export async function runSmoke(
   { fetchImpl = fetch, log = console.log } = {},
 ) {
   const deadline = AbortSignal.timeout(options.timeoutMs);
-  // 15s is generous against a local Worker, where every request answers in
+  // 15s is generous against a local server, where every request answers in
   // milliseconds, and tight against one that was deployed seconds ago: a runner
-  // measured 5.1s for a bare `ping` and 6.1s for a login on a cold Worker,
+  // measured 5.1s for a bare `ping` and 6.1s for a login on a cold deployment,
   // settling to 1-2s once warm (DISCREPANCIES.md, 2026-09-15). A remote smoke
   // runs in exactly that cold window, so it gets a ceiling to match while the
   // local one keeps the tight bound that makes a genuine hang obvious fast.
@@ -174,18 +174,18 @@ export async function runSmoke(
   };
   // One retry, and only when a request produced no response at all.
   //
-  // Against a deployed Worker a POST occasionally never returns, while the
-  // Worker's own trace shows the action completing normally —
+  // Against a deployed application a POST occasionally never returns, while the
+  // application's own log shows the action completing normally —
   // `create-job … outcome ok, durationMs 214` — with no exception logged, and a
   // repeat of the same call succeeding in about three seconds. Whatever loses
-  // the response sits between the runner and the edge, not in the application,
+  // the response sits between the runner and the platform, not in the application,
   // and a smoke that fails on it reports a defect that does not exist
   // (DISCREPANCIES.md, 2026-09-15).
   //
   // Retrying a command is safe here by design rather than by luck: creates
   // carry an idempotency key and replay to the same resource, and every other
   // command is guarded on `expectedVersion`, so a duplicate delivery is refused
-  // rather than applied twice (B11). A retry that reaches a Worker which did
+  // rather than applied twice (B11). A retry that reaches a server which did
   // process the first attempt therefore still asserts the truth.
   const action = async (name, body, expected = 200, activeClient = client) => {
     let result;
@@ -214,7 +214,7 @@ export async function runSmoke(
   /**
    * A version-guarded command whose reply may not survive the trip.
    *
-   * A lost response is not a lost write: the request reaches the Worker and
+   * A lost response is not a lost write: the request reaches the server and
    * applies, and the retry then meets B11's guard — `Already undone`, or
    * `The job was changed by someone else` — which is the system working, not
    * failing. Both were observed on staging, one run apart
@@ -364,7 +364,7 @@ export async function runSmoke(
       );
       created = await action("create-job", {
         customerId: customer.id,
-        title: `Worker smoke ${options.runId}`,
+        title: `Smoke ${options.runId}`,
         scheduledAt: "2030-01-15T09:00:00.000Z",
         idempotencyKey: `smoke-${options.runId}`,
       });
@@ -446,7 +446,7 @@ export async function runSmoke(
           );
           const createdForAccounting = await action("create-job", {
             customerId: customer.id,
-            title: `Worker accounting smoke ${options.runId}`,
+            title: `Accounting smoke ${options.runId}`,
             scheduledAt: "2030-01-16T09:00:00.000Z",
             idempotencyKey: `accounting-smoke-${options.runId}`,
           });
